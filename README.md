@@ -1,5 +1,7 @@
 # OSSLab Manager · 強模型當技術長，Flash 當 junior（Claude／ZCode／Codex／Cursor 通用）
 
+**中文** | [English](README.en.md)
+
 你想要的是一個**資深技術長帶 junior 工程師**的團隊：技術長的判斷力與持續力都在，junior 的成本與速度也都在。
 
 這個 skill 就是這個團隊。強模型（Opus 5.5+／GPT-6 Astra）當**技術長**：盤點現況、拆工單、定驗收，不寫實作碼——它的每一分額度都花在判斷上。便宜快速的 Flash 級模型當 **junior 工程師**埋頭寫碼。再找另一家廠商的模型做外部唯讀 code review，技術長逐條核實、親自重跑每條驗收命令，逐張提交。
