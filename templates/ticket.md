@@ -1,9 +1,11 @@
 # T<N>：<簡短標題>
 
-> 派單：<經理：Claude／ZCode／Codex> | 工人：pi / deepseek-v4.1-flash（預設）或 zcode / GLM-5.3-Flash（備援）
+> 派單：<經理：Claude／ZCode／Codex／Cursor> | 工人：pi / deepseek-v4.1-flash（預設）或 zcode / GLM-5.3-Flash（備援）
 > workdir: <相對專案根目錄的作業目錄；在根目錄就刪掉這行>
 > blocked-by: <前置工單編號，如 T3；沒有寫「無」>
 > claimed-by: （派單時由經理填寫）
+> review-tier: <高階｜低階；派單時預估，驗收時照實際 diff 重定，只升不降>
+> 重派：<無；有就寫次數、時間與原因>
 
 ## 目標
 <一句話：這張單解決什麼問題。>
@@ -32,3 +34,6 @@
 ## 產出
 - <要新建或修改的檔案>
 - 回執：`_receipts/T<N>-<短名>.receipt.md`
+
+## 經理直修（沒有就刪掉）
+- <第 k 條：檔案:行｜改了什麼｜commit>
