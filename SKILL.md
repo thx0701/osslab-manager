@@ -13,7 +13,7 @@ runtimes: [claude, zcode, codex, cursor]
 notes: >-
   改編自 yanauto/opus-manager（MIT）。2026-09-27 由 opus-manager 改名為 osslab-manager；Codex 版 astra-manager 已於 2026-09-27 退役整併進本
   skill（歷史查 Git）；同輪經理擴及 ZCode：術語與路徑去 Claude 專屬假設，helper 對外契約不變。Cursor 個人目錄不得另放
-  opus-manager 實體，改掛同一 `all/osslab-manager`。
+  opus-manager 實體，改掛同一 `all/osslab-manager`。公開副本是 https://github.com/thx0701/osslab-manager ；helper 用 $HOME 與 ZCODE_CLI_BIN，不寫死家目錄。
 ---
 
 # 工單托管（OSSLab manager）
@@ -85,7 +85,7 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 ## 三、派單
 
 1. `mv` 到 `_tickets/doing/`（挪成功＝上鎖），在 `claimed-by` 由經理填實際引擎：
-   `pi / deepseek-v4.1-flash（OpenRouter）@ 時間`，改派備援時寫 `zcode / GLM-5.3-Flash（Coding Plan）@ 時間`。
+   `pi / deepseek-v4.1-flash（OpenRouter）@ 時間`，改派備援時寫 `zcode / GLM-5.3-Flash（Coding Plan）@ 時間`。時間用第九節的團隊時間戳。
 2. 背景執行（各 runtime 的方式見開頭；一張單常跑一分鐘到數十分鐘）：
 
    ```bash
@@ -178,6 +178,26 @@ push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，看各張�
 閘門都過、repo 規則允許時才 push 分支並開 PR，PR 說明帶工單號；merge 與部署照 repo 流程並經人同意。清暫存前，把審查結論、各條處置、驗證命令與結果、剩餘限制保存在工單或 PR；秘密要遮，大型原始 log 留 Git 外（`~/.local/state/osslab-manager/`），唯一驗收證據不留在 `/tmp`。盤點建的臨時環境此時清掉。
 
 工單挪到 `_tickets/done/`。用白話告訴使用者：什麼能用了、會注意到什麼變化、還有哪些沒驗；分清「已 merge」與「已實際套用到 runtime」。
+
+## 九、長 session 到段落結束就換
+
+盤點、一張單從派工到本機提交、一輪審查核實，各算一個段落。產出已經在檔案裡（缺口表、工單、回執、審查報告、commit）才算這個段落結束。工人還在跑，或回執還沒讀完，留在這則。
+
+這則已經做完至少一個段落，而且後面還有下一個段落時，換一則新 session。下一個段落不接在這則對話後面寫。
+
+1. 交接寫到 `~/.local/state/osslab-manager/handoffs/<短名>.md`，不進 git。留下使用者目標原話、已完成到哪一張單、workdir、HEAD、下一件的第一個動作、還沒定的決定、工單寫過的客戶時區。不貼對話，不貼 diff。
+2. 使用者下過持續目標，而且這則經理跑在 Paseo：自己開下一則。持續目標是 Codex `/goal <objective>`，或使用者說的 goal、做到完、自動接力。用 Paseo `create_agent`，同一個 workspace；provider、模型、mode 沿用目前這則，不確定就先 `list_providers` 與 `list_models`。`initialPrompt` 只要下一則先讀交接檔，再做下一件的第一個動作。新 session 若是 Codex，用同一個 objective 再下一次 `/goal`（goal 綁在原來的 thread）。Codex 派工仍要 Full Access。開完把新 agent id 告訴使用者。開不起來就改走第 3 點。
+3. 沒有持續目標，或不在 Paseo：停下。把交接路徑和下面這段開頭交給使用者，請他開新 session。這則不再做下一個段落。
+
+   ```text
+   接手 osslab-manager。先讀 <交接檔>。目標：<原話>。下一件：<第一個動作>。workdir：<路徑> HEAD：<sha>。
+   ```
+
+4. 使用者說留在這則，才繼續。一次只開一則下一手。
+
+**時區**：工人環境不改寫 `TZ`。呼叫端有設就留下，沒設就不補。給團隊看的時間（`claimed-by`、審查 log、回執完成時間、給人的檔名）用 `TZ=Asia/Taipei date` 取一次，不 export 進工人或審查進程。客戶、訂單、排程、信件、對外檔案的時間以工單寫的時區為準；工單沒寫就停下來問。
+
+第五節的 Grok 唯讀審查照舊。換 session、對齊公開 repo，都不改審查員。
 
 ## 規矩
 

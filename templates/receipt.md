@@ -1,7 +1,7 @@
 # 回執 T<N>：<簡短標題>
 
 > 執行引擎：<實際執行的 CLI 和模型，照派單提示寫>
-> 完成時間：YYYY-MM-DD HH:MM
+> 完成時間：YYYY-MM-DD HH:MM +0800
 > 工單：留在 _tickets/doing/ 等待驗收
 
 ## 1. 做了什麼

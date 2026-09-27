@@ -72,6 +72,12 @@ A goal (three things) → stocktake (measure before asking; a gap table lets you
 
 Tickets live in `_tickets/open|doing|done/` (the directory is the status), receipts in `_receipts/`, run records in `~/.local/state/osslab-manager/`.
 
+## Long sessions
+
+When a section ends (stocktake, one ticket committed, or one review round verified) and another section remains, the tech lead writes a handoff under `~/.local/state/osslab-manager/handoffs/` and moves to a new session. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next session itself; otherwise it stops and gives you a prompt to paste. The procedure is in SKILL.md, section 九.
+
+Team-facing timestamps use Taiwan time (+0800). Customer, order, schedule, and external-file times follow the timezone written on the ticket. Workers do not lock `TZ` to Taipei. Grok stays the default read-only reviewer.
+
 ## When not to use it
 
 - One-line fixes or copy changes: just do them; don't pay the ticketing overhead (the skill itself says so: work normally unless asked to delegate).
@@ -95,7 +101,7 @@ Tickets live in `_tickets/open|doing|done/` (the directory is the status), recei
 - Recovery for tickets stuck in `doing`: PID-reuse check, half-finished changes saved as a patch, re-dispatches recorded on the same ticket
 - Commit gate: each ticket must pass acceptance, verification, and review verification before commit; valid blocking findings can't be deferred to another ticket
 - Helpers keep keys out of argv, start workers in a clean environment, and connect stdin to /dev/null
-- Timezone is always Taiwan (+0800)
+- Team timestamps use Taiwan time (+0800); customer and external data follow the ticket's timezone
 
 ## Environment assumptions
 
