@@ -10,6 +10,27 @@
 
 > A tech-lead skill for coding agents: your strongest model plays the senior tech lead — it inventories the repo, splits the goal into verifiable tickets, dispatches cheap flash-tier juniors to implement, re-runs every acceptance command itself, gets an out-of-family model to review read-only, and commits ticket by ticket. Senior judgment, junior cost.
 
+## 改版思路：先把目標定住，再拆解
+
+第一版的問題不在模型不夠強，而在**一則 session 扛了全部職責**：對齊需求、盤點、派工、等待、驗收、審查、提交都擠在同一段 context 裡，越到後段判斷越糊，session 一斷，派出去的工人和驗收進度也跟著斷。
+
+這一版借鏡 [OpenRig](https://github.com/mvschwarz/openrig) 的兩個想法——**持久的角色**與**明確的交接**——改成兩層：
+
+1. **目標確定，才拆解。** 規格段只做一件事：跟你把「做什麼／不做什麼／怎麼算完成」對齊，寫成確認清單。「不做什麼」寫不出來，就代表範圍還沒定，不開派。定住之後才拆成工單與工單鏈（同一條鏈共用一棵 worktree，互不依賴的鏈才平行）。
+2. **判斷歸 skill，執行歸帳本。** 技術長只負責判斷（拆單、驗收、核實、提交）；派工、等待、恢復、交接交給 [Relay](https://github.com/thx0701/osslab-manager/tree/main/relay)（`osrelay`）——一個本機 CLI，用 SQLite 記每張單、每次 attempt 與證據指紋。工人比技術長活得久；技術長換 session 用 `context` 接手，不靠記憶；`accept` 由程式核對：這張單驗過的每一條命令最新一次都成功、最新審查成功（低階單可註明理由豁免），而且都對應目前 Git 版本、證據檔沒被換掉——它不替你判斷命令選得對不對；`finalize` 核對你的提交就是驗收過的那棵樹、HEAD 是這個提交、工作樹與暫存區乾淨、而且是驗收起點的直接單親提交（沒有變更時可沿用原 HEAD）。
+
+於是 session 按職責分段：**規格段 → 施工段 → 驗收段**，每段結束寫約 2KB 的交接，下一段只讀交接開工（見下方「三段式 session」）。
+
+### 要不要搭 Paseo
+
+**不是必須，但建議搭。** 三層分開看：
+
+- **skill**：任何 host 都能用；沒裝 Relay 時技術長用 `scripts/` 的 helper 手動派工。
+- **Relay**：任何 Linux 主機裝了 `osrelay`，Claude Code 或 Codex 當技術長就走 Relay（Paseo 上或一般終端機都行）。ZCode／Cursor 也能派工，但 `bind` 只記 codex／claude。
+- **Paseo**：只多一件事——自動接段。
+
+搭 [Paseo](https://github.com/getpaseo/paseo) 多得到的是**自動接段**：你下了持續目標（goal、做到完、Codex `/goal`）時，技術長段落結束會用 Paseo 的 `create_agent` 自己開下一段；沒有 Paseo，它會停下來給你一段開頭文字，你開新 session 貼上即可。長工單鏈、會跨好幾段的工作，搭 Paseo 省最多手。
+
 ## 給 goal 的三要素
 
 goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期輸出的契約。想讓技術長接得住，把三件事講清楚：
@@ -21,6 +42,8 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 例：「把 FB 賣貨便上架補到 spec 完整覆蓋。不含金流與物流。做完每個品項在賣場都看得到對應規格與狀態。正本：`docs/listing-spec.md`。」
 
 未定的業務規則（錢、權限、違約條款…）技術長會一次一題回來問你——那不是摩擦，是管線在擋「AI 發明業務規則」。
+
+操作者一頁說明（誰做什麼、確認清單、三段式換 session、何時用 Relay）：[docs/operator-guide.md](docs/operator-guide.md)。
 
 ## 實測經驗
 
@@ -66,7 +89,8 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
    - `~/.openclaw/secrets/glm-coding-plan.env`：`ZHIPU_API_KEY=...`
    - ZCode CLI 位置可用 `ZCODE_CLI_BIN` 覆蓋。
 3. 需要本機裝好 `pi`、`zcode` CLI；審查用 `grok`（或換 GLM 類的唯讀審查）。
-4. 在對話裡說「托管」「走工單」「派出去」，丟出帶三要素的 goal，技術長就會照 skill 跑。
+4. （建議）安裝 Relay：`cd relay && python3 deploy/install-user.py`，再照 [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md) 啟用 `osrelay.service`。技術長會照 [docs/relay.md](docs/relay.md) 改走 Relay 派工。
+5. 在對話裡說「托管」「走工單」「派出去」，丟出帶三要素的 goal，技術長就會照 skill 跑。
 
 ## 流程
 
@@ -74,13 +98,9 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 
 工單放 `_tickets/open|doing|done/`（目錄即狀態），回執放 `_receipts/`，執行紀錄放 `~/.local/state/osslab-manager/`。
 
-## 長 session
+## 三段式 session
 
-不是每個段落都換 session：PR 已 merge、你叫停、卡在等你決定，或這則跑了約 3 小時（runtime 有回報時再加 context 約 60%），技術長才把約 2KB 的交接寫進 `~/.local/state/osslab-manager/handoffs/`，換一則新 session。新 session 只核 HEAD 與下一張工單，不重新盤點。你在 Paseo 上已經下了 goal（或 Codex `/goal`）時，技術長自己開下一則；否則它停下，把可貼上的開頭交給你。做法在 SKILL.md「九、長 session」。
-
-等工人時一次等到底，不幾秒問一次進度；Codex 技術長固定用 medium。
-
-給團隊的時間戳用台灣時間（+0800）；主機時鐘跑 UTC，helper 已內建 `TZ=Asia/Taipei`。Grok 仍是預設唯讀審查。
+技術長按職責分段換 session，不讓一則 session 扛全部：**規格段**（對齊、盤點、拆單、貼確認清單）→ **施工段**（派 junior、收回執）→ **驗收段**（重跑驗收、審查、核實、提交）。每段結束把約 2KB 的交接寫進 `~/.local/state/osslab-manager/handoffs/`，下一段只讀交接開工。低階單可在施工段接著驗收，修復單留在驗收段就地派；段內跑了約 3 小時或 context 約 60% 也會換。你在 Paseo 上已經下了 goal（或 Codex `/goal`）時，技術長自己開下一段；否則它停下，把可貼上的開頭交給你。做法在 SKILL.md「九、按職責分段換 session」。
 
 ## 什麼時候不要用
 
@@ -109,7 +129,7 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 
 ## 環境假設
 
-SKILL.md 提到的 `develop → implement → verify-change → code-review` 是我們內部的配套 skill 鏈，外部使用者可換成自己的開發流程；grill／to-spec 等對齊工具同理。金鑰路徑與模型路由改 `scripts/` 開頭幾行即可。
+Relay（`relay/`）需要 Linux、Python 3.11+ 與 Git，只用標準函式庫；runner 建議用 systemd user service 常駐。SKILL.md 提到的 `develop → implement → verify-change → code-review`、`to-tickets` 是我們內部的配套 skill 鏈（skill 也寫了沒有時怎麼收斂），外部使用者可換成自己的開發流程；grill／to-spec 等對齊工具同理。金鑰路徑與模型路由改 `scripts/` 開頭幾行即可。
 
 ## License
 

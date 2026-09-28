@@ -8,6 +8,27 @@ This skill is that team. A strong model (Opus 5.5+ / GPT-6 Astra) is the **tech 
 
 **Senior judgment, junior cost.** However big the goal, the tokens spent on implementation are DeepSeek Flash tokens, not your Opus subscription.
 
+## Why this version: pin the goal down, then break it up
+
+The first version's problem was not a weak model. It was **one session carrying every responsibility**: aligning requirements, taking stock, dispatching, waiting, accepting, reviewing, and committing all lived in one context. Judgment got muddier toward the end, and when the session dropped, the dispatched workers and the acceptance progress dropped with it.
+
+This version borrows two ideas from [OpenRig](https://github.com/mvschwarz/openrig) — **durable roles** and **explicit handoffs** — and splits the work into two layers:
+
+1. **Settle the goal before splitting it.** The spec segment does one thing: agree with you on what to do, what not to do, and what counts as done, written as a confirmation checklist. If "what not to do" can't be written, the scope isn't settled and nothing is dispatched. Only then is the goal split into tickets and ticket chains (one chain shares one git worktree; only independent chains run in parallel).
+2. **Judgment stays in the skill; execution goes to a ledger.** The tech lead only judges (splitting, acceptance, verifying findings, committing). Dispatch, waiting, recovery, and handoff go to [Relay](https://github.com/thx0701/osslab-manager/tree/main/relay) (`osrelay`), a local CLI that records every ticket, attempt, and evidence fingerprint in SQLite. Workers outlive the tech lead; a new session picks up with `context` instead of memory. `accept` checks in code that the latest run of every command verified on the ticket succeeded, the latest review succeeded (or a low-tier waiver was given with a reason), and all of it matches the current Git version with untampered evidence — it does not judge whether the commands were the right ones. `finalize` checks that your commit is exactly the accepted tree, is HEAD, leaves a clean worktree and index, and is a single-parent child of the accepted base (with no change, the original HEAD may close it).
+
+So sessions are split by responsibility — **spec → build → acceptance** — and each segment ends with a ~2KB handoff that the next one starts from (see "Three-segment sessions" below).
+
+### Do you need Paseo?
+
+**No, but it's recommended.** Three layers:
+
+- **Skill**: works on any host; without Relay the tech lead dispatches with the helpers in `scripts/`.
+- **Relay**: on any Linux host with `osrelay` installed, a Claude Code or Codex tech lead goes through Relay (in Paseo or a plain terminal). ZCode / Cursor can dispatch too, but `bind` only records codex / claude.
+- **Paseo**: adds one thing — automatic segment hand-over.
+
+What [Paseo](https://github.com/getpaseo/paseo) adds is **automatic segment hand-over**: when you have set a persistent goal (a goal, "run it to the end", Codex `/goal`), the tech lead ends a segment by opening the next session itself through Paseo's `create_agent`. Without Paseo it stops and gives you an opening prompt to paste into a new session. Long ticket chains that span several segments save the most hands with Paseo.
+
 ## Three things to give with a goal
 
 The goal stops at the tech lead; below it, every ticket is a contract with acceptance commands and expected output. For the tech lead to take the goal on, state three things:
@@ -64,7 +85,8 @@ These are "tests green but actually wrong" defects, the kind a model reviewing i
    - `~/.openclaw/secrets/glm-coding-plan.env`: `ZHIPU_API_KEY=...`
    - Override the ZCode CLI location with `ZCODE_CLI_BIN`.
 3. Install the `pi` and `zcode` CLIs locally; reviews use `grok` (or a GLM-style read-only reviewer).
-4. In chat, say 托管 / 走工單 / 派出去 (delegate / run tickets / dispatch) or `osslab-manager`, give a goal with the three things above, and the tech lead follows the skill.
+4. (Recommended) Install Relay: `cd relay && python3 deploy/install-user.py`, then enable `osrelay.service` as described in [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md). The tech lead then dispatches through Relay per [docs/relay.md](docs/relay.md).
+5. In chat, say 托管 / 走工單 / 派出去 (delegate / run tickets / dispatch) or `osslab-manager`, give a goal with the three things above, and the tech lead follows the skill.
 
 ## Flow
 
@@ -72,13 +94,9 @@ A goal (three things) → stocktake (measure before asking; a gap table lets you
 
 Tickets live in `_tickets/open|doing|done/` (the directory is the status), receipts in `_receipts/`, run records in `~/.local/state/osslab-manager/`.
 
-## Long sessions
+## Three-segment sessions
 
-The tech lead doesn't switch sessions after every section. It switches only when the PR is merged, you stop it, it is waiting on your decision, or the session has run for about 3 hours (or context passes about 60%, when the runtime reports usage). Then it writes a handoff of about 2KB under `~/.local/state/osslab-manager/handoffs/` and moves to a new session, which only checks HEAD and the next ticket instead of redoing the stocktake. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next session itself; otherwise it stops and gives you a prompt to paste. The procedure is in SKILL.md, section 九.
-
-While a worker runs, the lead waits once until it finishes instead of polling every few seconds. A Codex tech lead always runs at medium effort.
-
-Team-facing timestamps use Taiwan time (+0800); the host clock runs UTC, so helpers already set `TZ=Asia/Taipei` for stamps. Grok stays the default read-only reviewer.
+The tech lead splits work by responsibility instead of cramming it into one session: a **spec segment** (align, take stock, split tickets, post the confirmation checklist), a **build segment** (dispatch juniors, collect receipts), and an **acceptance segment** (re-run acceptance, review, verify findings, commit). Each segment ends with a handoff of about 2KB under `~/.local/state/osslab-manager/handoffs/`, and the next segment starts from that file alone. Low-tier tickets may be accepted in the build session, and fix-up tickets stay in the acceptance segment; a segment that has run about 3 hours (or passes about 60% context, when reported) also switches. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next segment itself; otherwise it stops and gives you a prompt to paste. See SKILL.md section 九. An operator one-pager (in Chinese) is at [docs/operator-guide.md](docs/operator-guide.md).
 
 ## When not to use it
 
@@ -107,7 +125,7 @@ Team-facing timestamps use Taiwan time (+0800); the host clock runs UTC, so help
 
 ## Environment assumptions
 
-The `develop → implement → verify-change → code-review` chain mentioned in SKILL.md is our internal set of companion skills; external users can swap in their own development flow, and the same goes for alignment tools such as grill / to-spec. Key paths and model routing are set in the first few lines of each script under `scripts/`.
+Relay (`relay/`) needs Linux, Python 3.11+, and Git, and uses only the standard library; run its runner as a systemd user service. The `develop → implement → verify-change → code-review` chain and `to-tickets` mentioned in SKILL.md are our internal set of companion skills; external users can swap in their own development flow, and the same goes for alignment tools such as grill / to-spec. Key paths and model routing are set in the first few lines of each script under `scripts/`.
 
 ## License
 

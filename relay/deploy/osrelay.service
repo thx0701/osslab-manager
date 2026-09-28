@@ -1,0 +1,18 @@
+[Unit]
+Description=OSSLab Relay local worker supervisor
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/osrelay serve
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TZ=Asia/Taipei
+UMask=0077
+Restart=on-failure
+RestartSec=3
+# Only signal the runner; it drains children. A forced stop preserves children
+# for reconciliation on restart instead of silently interrupting workers.
+KillMode=process
+TimeoutStopSec=infinity
+
+[Install]
+WantedBy=default.target

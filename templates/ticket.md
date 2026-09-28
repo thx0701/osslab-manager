@@ -1,9 +1,11 @@
 # T<N>：<簡短標題>
 
-> 派單：<經理：Claude／ZCode／Codex／Cursor> | 工人：pi / deepseek-v4.1-flash（預設）或 zcode / GLM-5.3-Flash（備援）
+> 派單：<經理：Claude／ZCode／Codex／Cursor> | 工人：<pi 預設或 zcode 備援；實際引擎見 claimed-by>
 > workdir: <相對專案根目錄的作業目錄；在根目錄就刪掉這行>
 > blocked-by: <前置工單編號，如 T3；沒有寫「無」>
-> claimed-by: （派單時由經理填寫）
+> chain: <工單鏈名。同一條鏈共用一棵 git worktree；跟進單沿用母鏈名。pi 接續記憶用單號，不用這個名字>
+> git-worktree: <這條鏈的 git worktree 路徑。可同時派的鏈各用一棵>
+> claimed-by: （派出後由經理照 worker.log 起跑行的 engine= @ at= 填寫）
 > review-tier: <高階｜低階；派單時預估，驗收時照實際 diff 重定，只升不降>
 > 重派：<無；有就寫次數、時間與原因>
 
@@ -21,7 +23,7 @@
 1. 只動：<檔案／模組>，別的不碰。
 2. 密鑰不寫進程式、文件和 log；不讀秘密或憑證檔。需要正式站的驗證由經理做。
 3. 不 git commit／push（經理逐張驗收後在本機提交）；改動範圍以 `git diff HEAD` 為準。
-4. 工單檔留在 `_tickets/doing/`，不要挪。
+4. 工單檔不要挪。
 5. 共用資源不准刪：<盤點建的測試 DB／容器／網路；沒有就刪掉這行>。
 
 ## 驗收（寫命令，不寫感覺）
