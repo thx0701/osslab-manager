@@ -41,7 +41,7 @@ These are "tests green but actually wrong" defects, the kind a model reviewing i
 | Role | Recommendation | Notes |
 |---|---|---|
 | Tech lead harness | Any of Claude Code / Codex / ZCode / Cursor | All four runtimes share the same skill |
-| Tech lead model (subscription) | Claude **Opus 5.5 or later**, or **GPT-6 Astra**; reasoning **high or above** | The lead's value is all judgment (splitting, acceptance, verification); don't skimp here |
+| Tech lead model (subscription) | Claude **Opus 5.5 or later** (reasoning **high or above**), or **GPT-6 Astra** (always **medium**: measured about 3× faster per step than xhigh) | The lead's value is all judgment (splitting, acceptance, verification); don't skimp here |
 | Junior engineer | **DeepSeek 4.1 Flash** (pi headless, pay per token) | Cheap and fast; this is the one |
 | External review | **Grok** or **GLM** both work | Review quality is similar; pick one from a different vendor than the lead and the juniors |
 
@@ -74,9 +74,11 @@ Tickets live in `_tickets/open|doing|done/` (the directory is the status), recei
 
 ## Long sessions
 
-When a section ends (stocktake, one ticket committed, or one review round verified) and another section remains, the tech lead writes a handoff under `~/.local/state/osslab-manager/handoffs/` and moves to a new session. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next session itself; otherwise it stops and gives you a prompt to paste. The procedure is in SKILL.md, section 九.
+The tech lead doesn't switch sessions after every section. It switches only when the PR is merged, you stop it, it is waiting on your decision, or the session has run for about 3 hours (or context passes about 60%, when the runtime reports usage). Then it writes a handoff of about 2KB under `~/.local/state/osslab-manager/handoffs/` and moves to a new session, which only checks HEAD and the next ticket instead of redoing the stocktake. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next session itself; otherwise it stops and gives you a prompt to paste. The procedure is in SKILL.md, section 九.
 
-Team-facing timestamps use Taiwan time (+0800). Customer, order, schedule, and external-file times follow the timezone written on the ticket. Workers do not lock `TZ` to Taipei. Grok stays the default read-only reviewer.
+While a worker runs, the lead waits once until it finishes instead of polling every few seconds. A Codex tech lead always runs at medium effort.
+
+Team-facing timestamps use Taiwan time (+0800); the host clock runs UTC, so helpers already set `TZ=Asia/Taipei` for stamps. Grok stays the default read-only reviewer.
 
 ## When not to use it
 
@@ -86,22 +88,22 @@ Team-facing timestamps use Taiwan time (+0800). Customer, order, schedule, and e
 
 ## Safety boundaries
 
-- Juniors start in a **clean environment** (they don't inherit the tech lead session's tokens or business credentials); keys travel only in environment variables, never argv, logs, or git.
+- Juniors start in a **clean environment** (they don't inherit the tech lead session's tokens or business credentials); keys travel only in environment variables, never argv, logs, or git. The pi junior also starts minimal: no skills or extensions, and no AGENTS.md is auto-loaded at any level; its instructions tell it to read the repo's own rules.
 - The reviewer is **read-only** (Read / Grep, MCP tools denied) and may not edit files.
 - Implementation goes only through the helper CLIs; host subagents (Claude Task / Codex subagents / Cursor Task) are banned, because they run inside the tech lead's process and bypass the whole isolation design.
 
 ## Differences from upstream (yanauto/opus-manager)
 
 - Worker routing is preset (no per-task discovery): DeepSeek by default, GLM as fallback, Grok for read-only review
-- Works across four runtimes: Claude / ZCode / Cursor use Bash background jobs, Codex uses managed sessions
+- Works across four runtimes: all dispatch in the background; Claude Code and ZCode wait for completion notices, Codex uses managed sessions with a code-mode loop, Cursor waits in the foreground with `wait-worker.sh`
 - Measure before asking: stocktaking produces a gap table and a human picks the scope; in ticketing, humans own scope and the tech lead owns granularity
 - Tickets have a `blocked-by` dependency field; only unblocked tickets are dispatched; separate worktrees run separate chains in parallel
 - Review tiers (`review-tier`): anything touching assertions / guards / money or permissions is high tier; tiers only go up, never down
-- Tech lead direct fixes: verified, non-blocking small nits may be fixed directly (≤10 lines, no behavior change); all valid findings from one review round go into a single fix ticket instead of one ticket per finding (blocking findings still go to a junior)
+- Tech lead direct fixes: verified, non-blocking small nits may be fixed directly (≤10 lines, no behavior change); copy that only restates existing behavior (README, verification reports) may be edited directly up to about 20 lines, but never receipts or specs; all valid findings from one review round go into a single fix ticket instead of one ticket per finding (blocking findings still go to a junior)
 - Recovery for tickets stuck in `doing`: PID-reuse check, half-finished changes saved as a patch, re-dispatches recorded on the same ticket
 - Commit gate: each ticket must pass acceptance, verification, and review verification before commit; valid blocking findings can't be deferred to another ticket
 - Helpers keep keys out of argv, start workers in a clean environment, and connect stdin to /dev/null
-- Team timestamps use Taiwan time (+0800); customer and external data follow the ticket's timezone
+- Team timestamps use Taiwan time (+0800)
 
 ## Environment assumptions
 

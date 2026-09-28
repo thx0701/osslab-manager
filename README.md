@@ -43,7 +43,7 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 | 角色 | 建議 | 備註 |
 |---|---|---|
 | 技術長 harness | Claude Code／Codex／ZCode／Cursor 任一 | 四 runtime 共用同一份 skill |
-| 技術長模型（訂閱制） | Claude **Opus 5.5 以上**，或 **GPT-6 Astra**；思考等級 **high 以上** | 技術長的價值全在判斷（拆單、驗收、核實），這層不要省 |
+| 技術長模型（訂閱制） | Claude **Opus 5.5 以上**（思考等級 **high 以上**），或 **GPT-6 Astra**（固定 **medium**：實測每步比 xhigh 快約 3 倍） | 技術長的價值全在判斷（拆單、驗收、核實），這層不要省 |
 | junior 工程師（sub） | **DeepSeek 4.1 Flash**（pi 無頭、按量計費） | 便宜跟快，就它 |
 | 外部審查 | **Grok** 或 **GLM** 等都不錯 | 審查意見差異不大；挑一個跟技術長／junior 不同家的（異族）即可 |
 
@@ -76,9 +76,11 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 
 ## 長 session
 
-一個段落（盤點、一張單提交、一輪審查核實）結束，後面還有下一段時，技術長把交接寫進 `~/.local/state/osslab-manager/handoffs/`，換一則新 session。你在 Paseo 上已經下了 goal（或 Codex `/goal`）時，技術長自己開下一則；否則它停下，把可貼上的開頭交給你。做法在 SKILL.md「九、長 session」。
+不是每個段落都換 session：PR 已 merge、你叫停、卡在等你決定，或這則跑了約 3 小時（runtime 有回報時再加 context 約 60%），技術長才把約 2KB 的交接寫進 `~/.local/state/osslab-manager/handoffs/`，換一則新 session。新 session 只核 HEAD 與下一張工單，不重新盤點。你在 Paseo 上已經下了 goal（或 Codex `/goal`）時，技術長自己開下一則；否則它停下，把可貼上的開頭交給你。做法在 SKILL.md「九、長 session」。
 
-給團隊的時間戳用台灣時間（+0800）。客戶、訂單、排程、對外檔案跟工單寫的時區；工人不把 `TZ` 鎖成台北。Grok 仍是預設唯讀審查。
+等工人時一次等到底，不幾秒問一次進度；Codex 技術長固定用 medium。
+
+給團隊的時間戳用台灣時間（+0800）；主機時鐘跑 UTC，helper 已內建 `TZ=Asia/Taipei`。Grok 仍是預設唯讀審查。
 
 ## 什麼時候不要用
 
@@ -88,22 +90,22 @@ goal 停在技術長這層；往下每一張工單都是帶驗收命令與預期
 
 ## 安全邊界
 
-- junior 以**乾淨環境**啟動（不繼承技術長 session 的 token 與業務憑證）；金鑰只走環境變數，不進 argv／log／git。
+- junior 以**乾淨環境**啟動（不繼承技術長 session 的 token 與業務憑證）；金鑰只走環境變數，不進 argv／log／git。pi junior 另以精簡模式啟動：不載入 skill 與擴充，也不自動載入任何一層的 AGENTS.md；repo 自己的規矩由指示要求它讀。
 - 審查員**唯讀**（Read／Grep、deny MCP 工具），不得改檔。
 - 施工只准 helper CLI；宿主 subagent（Claude Task／Codex subagent／Cursor Task）一律禁用——它們跑在技術長進程裡，繞過整個隔離設計。
 
 ## 與 upstream（yanauto/opus-manager）的差異
 
 - 工人路由預先定好（不逐案摸索）：DeepSeek 預設、GLM 備援、Grok 唯讀審查
-- 四 runtime 通用：Claude／ZCode／Cursor 用 Bash 背景、Codex 用受管 session
+- 四 runtime 通用：都在背景派工；Claude Code／ZCode 等完成通知、Codex 用受管 session 與 code-mode 迴圈、Cursor 前景跑 `wait-worker.sh`
 - 先量再問：盤點產出缺口表，人選範圍；拆單「人管範圍、技術長管粒度」
 - 工單有 `blocked-by` 依賴欄，只派已解除的單；不同 worktree 平行跑不同鏈
 - 審查分級（`review-tier`）：動到斷言／guard／錢權類一律高階；只升不降
-- 技術長直修：已核實的非阻擋小 nit 可直接改（≤10 行、不改行為）；一輪審查的成立項合成一張修復單，不再一條一單（阻擋級照舊走 junior）
+- 技術長直修：已核實的非阻擋小 nit 可直接改（≤10 行、不改行為）；只複述既有行為的文案（README、驗證報告）約 20 行內也可直接改，回執與 spec 不行；一輪審查的成立項合成一張修復單，不再一條一單（阻擋級照舊走 junior）
 - doing 死鎖回收：PID 重用檢查、半套改動存 patch、重派記在同一張單
 - 驗收閘門：逐張提交前要過驗收＋verify＋審查核實；阻擋級成立項不得拆單繞過
 - helper 金鑰不進 argv、乾淨環境啟動、stdin 接 /dev/null
-- 團隊時間戳用台灣時間（+0800）；客戶與對外資料跟工單時區
+- 團隊時間戳用台灣時間（+0800）
 
 ## 環境假設
 

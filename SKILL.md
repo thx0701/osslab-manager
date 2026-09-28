@@ -14,17 +14,20 @@ notes: >-
   改編自 yanauto/opus-manager（MIT）。2026-09-27 由 opus-manager 改名為 osslab-manager；Codex 版 astra-manager 已於 2026-09-27 退役整併進本
   skill（歷史查 Git）；同輪經理擴及 ZCode：術語與路徑去 Claude 專屬假設，helper 對外契約不變。Cursor 個人目錄不得另放
   opus-manager 實體，改掛同一 `all/osslab-manager`。公開副本是 https://github.com/thx0701/osslab-manager ；helper 用 $HOME 與 ZCODE_CLI_BIN，不寫死家目錄。
+  2026-09-28 主檔瘦身：等待細節移 docs/waiting.md、換段細節移 docs/handoff.md、UI 版面單規則移除（歷史查 Git）、時區收斂為一行。
 ---
 
 # 工單托管（OSSLab manager）
 
-只在使用者要求托管時使用。經理是目前這則 session 的 bot（Claude、ZCode、Codex 或 Cursor），負責盤點、拆單、派單、驗收、核實與提交；人決定未定的業務規則。實作交給工人，經理不親自寫實作碼（驗收不過時也不偷偷修，開跟進單；唯一例外是第六節的經理直修）。Claude／ZCode／Cursor 經理用 Bash 或 Shell 的背景執行派工與等審查；Codex 經理用受管 session（`exec_command`／`write_stdin`，工具名不同就用該 host 對應的受管背景機制），一樣不留未等待的調用、不用 nohup／`&` 脫離。施工只准本 skill 的 helper CLI（見「規矩」）。skill 檔與 scripts 走共用掛載 `~/.agents/skills/osslab-manager/`（各 runtime view 同源；Cursor 個人目錄同一實體）。**Codex 經理在 Paseo 要用 Full Access；`auto-review` 模式網路受限，派工一定會被擋。**
+只在使用者要求托管時使用。經理是目前這則 session 的 bot（Claude、ZCode、Codex 或 Cursor），負責盤點、拆單、派單、驗收、核實與提交；人決定未定的業務規則。實作交給工人，經理不親自寫實作碼（驗收不過時也不偷偷修，開跟進單；例外只有第二節的經理驗收工具與第六節的經理直修）。四種經理都在背景派工與派審查、照第三節第 4 點的等法等完才收，不留未等待的調用、不用 nohup／`&` 脫離。施工只准本 skill 的 helper CLI（見「規矩」）。skill 檔與 scripts 走共用掛載 `~/.agents/skills/osslab-manager/`：Codex、ZCode 直接掃 `~/.agents/skills`，Claude Code 的 view 與 Cursor 個人目錄是指向同一實體的 symlink（見 `core/skills/RUNTIMES.md`）。**Codex 經理在 Paseo 要用 Full Access（`auto-review` 模式網路受限，派工一定會被擋），推理固定 medium，goal 裡也不升 xhigh。**
 
 | 角色 | 執行者 | 呼叫 |
 |---|---|---|
-| 施工（預設） | pi CLI 在本機以 `-p` 無頭模式執行；模型 `deepseek/deepseek-v4.1-flash` 走 OpenRouter（按量計費，思考 `high`） | `scripts/pi-openrouter-worker.sh <workdir> <ticket>` |
-| 施工（備援） | ZCode CLI 在本機以 yolo 模式執行；模型 `GLM-5.3-Flash` 走雲端（BigModel Coding Plan 訂閱，思考預設 Max） | `scripts/zcode-cloud-worker.sh <workdir> <ticket>` |
+| 施工（預設） | pi CLI 在本機以 `-p` 無頭模式執行；模型 `deepseek/deepseek-v4.1-flash` 走 OpenRouter（按量計費，思考 `high`）；精簡啟動，不載入 skill、上層 AGENTS.md 與擴充 | `scripts/pi-openrouter-worker.sh [--resume <鏈名>] <workdir> <ticket>` |
+| 施工（備援） | ZCode CLI 在本機以 yolo 模式執行；模型 `GLM-5.3-Flash` 走雲端（BigModel Coding Plan 訂閱，思考預設 Max） | `scripts/zcode-cloud-worker.sh [--resume <鏈名>] <workdir> <ticket>`（不接續，一律從零） |
 | 審查 | Grok Build，`grok-4.7`，reasoning effort `medium`，只給 Read／Grep | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
+| 等待（工具） | 阻塞到 pid 結束，只印一行 | `scripts/wait-worker.sh <pid\|worker.log\|review.err> <max_seconds>` |
+| 證據（工具） | 跑一條命令，完整輸出與 JSON 信封存檔，stdout 只印摘要 | `scripts/evidence-run.sh <out-dir> <label> -- <命令…>` |
 
 路由已由本安裝定好，不重新摸工人、不另寫 `workers.md`。helper 不用 DGX Spark provider；憑證只從既有 secret 檔載入（`openrouter.env`、`glm-coding-plan.env`），不進 argv／log／git。要換模型或工具先問人，再改本 skill 開 PR。
 
@@ -32,13 +35,13 @@ notes: >-
 經理為 ZCode 時，備援工人與經理同屬 BigModel 系，且備援與本機 session 共用 Coding Plan 額度、可能互卡速率——預設仍 DeepSeek，異族審查照舊是 Grok；這種情況下改派備援等於換自己人施工，`claimed-by` 照實寫。
 兩者的程式碼與工單內容都會送到各自的雲端模型供應商（OpenRouter／DeepSeek、BigModel），工單照舊不寫秘密。
 
-**工人隔離的邊界**：helper 以乾淨環境變數啟動工人，不繼承經理 session 已匯出的 token 與業務憑證；但工人仍在本機跑 shell，看得到 Docker、網路與磁碟上的檔案（含 secret 檔），「不動 prod」只靠指示。所以工單不寫秘密或 secret 路徑；凡要碰 prod 的驗證（唯讀煙霧、XML-RPC、瀏覽器）由經理在第四節自己做；給工人拋棄式測試環境，並寫明哪些共用資源不准刪。
+**工人隔離的邊界**：helper 以乾淨環境變數啟動工人，不繼承經理 session 已匯出的 token 與業務憑證；但工人仍在本機跑 shell，看得到 Docker、網路與磁碟上的檔案（含 secret 檔），「不動 prod」只靠指示。pi 工人另以精簡模式啟動：不載入全域與公司 skill（含 Lark）、擴充與 prompt 範本，每一層的 AGENTS.md／CLAUDE.md 都不自動載入（上層的 house 規矩寫著怎麼載入團隊秘密）；repo 自己的 AGENTS.md／CLAUDE.md 改由 helper 指示與工單要求它用 read 去讀，實測會照讀照做。repo 自己的規矩若本身含 house 段落（例如 brain），工人讀檔時仍會看到，這由指示「不讀取、不輸出秘密」擋。2026-09-27 實測每次請求的 prompt 從約 7.3k token 降到 1.6k，工具照舊 read／bash／edit／write。zcode 備援還沒有對應的精簡開關，照舊載入。所以工單不寫秘密或 secret 路徑；凡要碰 prod 的驗證（唯讀煙霧、XML-RPC、瀏覽器）由經理在第四節自己做；給工人拋棄式測試環境，並寫明哪些共用資源不准刪。
 
 OSSLab 開發順序照舊：`develop → implement → verify-change → code-review`；Grok 審查是 code-review 內的獨立意見，不取代它。工人不 commit、不 push、不動 prod、不挪工單。可行時給工人獨立 git worktree；不把工人派進別人正在用的髒 checkout。
 
 ## 〇、現況盤點（先量再問）
 
-使用者問「完工了嗎」「做到哪了」「幫我補完」，或經理還不清楚系統現況時，先盤點再拆單。盤點是經理自己的活，不派工人。
+使用者問「完工了嗎」「做到哪了」「幫我補完」，或經理還不清楚系統現況時，先盤點再拆單。拿著交接檔接手的 session 看交接檔就算清楚現況（第九節；接手信任規則在 `docs/handoff.md`），不因接手重盤。盤點是經理自己的活，不派工人。
 
 1. **完成度正本**：找規格的狀態表、較新的 handoff spec（常取代舊裁決）、各 feature spec 的狀態行，再對照程式與 `git log`。文件常落後程式（做完了仍寫待實作），也可能超前；兩邊不一致就是文件漂移，記進缺口表。
 2. **跑所有既有測試層並對帳**：框架實際跑了幾個 vs 檔案裡定義幾個，連案例身分一起核——全綠但沒選中該驗的新場景不算通過。沒註冊進框架的、要直接執行的獨立腳本、被環境卡住的，都找出來另外跑。環境卡住（例如 PDF 渲染自鎖）先處理環境，不要把環境問題當產品缺陷。
@@ -70,6 +73,7 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 - 驗收寫命令與預期輸出，並寫「為什麼這樣驗收」——防止測試沒斷言卻過關。
 - 驗收命令優先引用 repo 既有的測試腳本；環境陷阱寫進腳本或盤點筆記，不要每張單複製長命令。同一串命令要寫第三次時，先開一張單把它做成腳本。
 - 工單引用的工具或腳本必須是**已提交**的版本：派單前確認它沒有未提交修改，也沒有進行中的工單正在改它（含其他 worktree 的路徑）。做不到就等改它的那張單提交後再派，或在工單寫明用 `git show <commit>:<path>` 取出的固定版本。
+- **經理驗收工具**：經理為驗收寫的量測、探針、overlay、聚合腳本，派單前先提交進 repo（放 `tests/` 或 `tools/`，單獨一個 commit，body 寫「經理驗收工具」），工單驗收直接呼叫它，工人跑同一支；不要留在 `~/.local/state/`，那裡工人拿不到，只能拿自製小資料自測全過。經理能提交的只有驗收腳本、輸出 schema 與 fixture；產品碼、既有斷言照舊走工人。這些 commit 落在第八節整批 `code-review` 範圍內。
 - 邊界寫明：只准動哪些檔、決策來源、回執路徑 `_receipts/<工單名>.receipt.md`、哪些共用資源不准刪。
 - 寫兩張派一張；下一張常取決於上一張回執的存疑項。
 - 每張在 `blocked-by` 寫前置工單，沒有寫「無」。前置單要在本 worktree 的 base 已有它的 commit 才算解除；它在別的 worktree 提交的，先 rebase 或 merge 進來再派。目錄就是狀態（`open`／`doing`／`done`），不另加狀態欄。
@@ -85,25 +89,38 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 ## 三、派單
 
 1. `mv` 到 `_tickets/doing/`（挪成功＝上鎖），在 `claimed-by` 由經理填實際引擎：
-   `pi / deepseek-v4.1-flash（OpenRouter）@ 時間`，改派備援時寫 `zcode / GLM-5.3-Flash（Coding Plan）@ 時間`。時間用第九節的團隊時間戳。
+   `pi / deepseek-v4.1-flash（OpenRouter）@ 時間`，改派備援時寫 `zcode / GLM-5.3-Flash（Coding Plan）@ 時間`。時間戳用 `TZ=Asia/Taipei date '+%F %T %z'` 取一次（主機時鐘是 UTC，別用裸 `date`）。
 2. 背景執行（各 runtime 的方式見開頭；一張單常跑一分鐘到數十分鐘）：
 
    ```bash
-   mkdir -p ~/.local/state/osslab-manager/<工單名>
+   # 工單狀態目錄帶 workdir 雜湊：不同 worktree 的同名單（各有一張 T1）不會互撞 log
+   D=~/.local/state/osslab-manager/<工單名>-$(printf '%s' "<workdir>" | sha256sum | cut -c1-8)
+   mkdir -p "$D"
+   L="$D/worker.log"
    # 預設 DeepSeek；改派備援時把 pi-openrouter-worker.sh 換成 zcode-cloud-worker.sh（參數相同）
-   bash ~/.agents/skills/osslab-manager/scripts/pi-openrouter-worker.sh <workdir> <workdir>/_tickets/doing/<工單>.md \
-     > ~/.local/state/osslab-manager/<工單名>/worker.log 2>&1
+   rc=0; bash ~/.agents/skills/osslab-manager/scripts/pi-openrouter-worker.sh --resume <鏈名> <workdir> <workdir>/_tickets/doing/<工單>.md \
+     > "$L" 2>&1 || rc=$?
+   printf '\nhelper exit=%s\n' "$rc" >> "$L"; exit "$rc"
    ```
 
-   要讓進行中的單不受 skill 中途更新影響，可凍結**整個 skill 目錄**再執行副本：`cp -rL ~/.agents/skills/osslab-manager ~/.local/state/osslab-manager/<工單名>/skill`，把 `git -C ~/.agents/skills/osslab-manager/ rev-parse HEAD` 記進工單；之後改跑 `…/<工單名>/skill/scripts/<helper>`。只複製腳本不行——helper 靠同一目錄的 `templates/receipt.md`，找不到會報錯退出。
+   `|| rc=$?` 讓殼開著 `set -e` 也照樣補上最後一行 `helper exit=<n>`（前面多一個換行，工人輸出沒換行結尾也不會黏在一起）；`exit "$rc"` 讓這次背景呼叫的結束碼等於 helper，所以它必須是這段的最後一個動作。
+
+   `--resume <鏈名>`：鏈名用原單號（`T1` 與它的 `T1b`、`T1c` 跟進、重派都用 `T1`）。同一條還沒提交的鏈，下一輪接續上一輪 pi 的記憶，省掉重讀 repo；helper 自己把關——不合續（非 git 工作樹、鏈起點後 HEAD 已變、沒留下 session、已接續 2 次）就從零開始並記在 log，接續時自動加「記憶不是證據、以工單與目前檔案為準、不沿用上一輪 fixture」。驗收命令或 fixture 改了、上一張回執有未處理的存疑、收屍留過 partial patch 時不要帶 `--resume`。zcode 備援沒有接續，帶了也從零開始。
+
+   要讓進行中的單不受 skill 中途更新影響：`cp -rL` 整個 skill 目錄到工單狀態目錄（`$D`）的 `skill/`，把 skill 的 git HEAD 記進工單，改跑副本裡的 helper。只複製 scripts/ 不行——helper 靠同目錄的 `templates/receipt.md`，找不到會報錯退出。
 
 3. 同一個 worktree 一次只派一張；不同 worktree 可以平行跑不同工單鏈。只派 `blocked-by` 已解除的單。
-4. 看進度：`worker.log` 第一行是 helper 印的 `pid`，其餘輸出常到結束才出現。用 `ps -o etime= -p <pid>` 看是否還在跑、`git -C <workdir> status --porcelain` 看有沒有動檔；不要為了看進度去 kill 或重派。
-5. 等完成通知再讀回執；讀到回執前不轉述、不猜結果。helper 非零退出時，即使有回執也要先查再收。
+4. **一次等到底**：等待中不跑 `ps`、`git status`、不看 log，也不用 10 秒以下的輪詢——每次探詢都是一整輪經理推理，外加重送整個 context。完成信號依 host 而定，審查員與長測試也照這樣派、照這樣等：
+   - Claude Code、ZCode：背景執行，等 host 的完成通知（ZCode 的背景 Bash 結束會主動回報，2026-09-28 本 skill 的 Grok 審查派工即以此收工；wait-worker.sh 只作 fallback）。
+   - Codex：受管 session（`exec_command`／`write_stdin`）加 code-mode 迴圈等 `exit_code`，具體做法與 JS 範例見 `docs/waiting.md`。
+   - Cursor 或任何沒有確認過完成通知的 host：背景派工後，前景跑 `wait-worker.sh <worker.log|review.err> <max_seconds>`（工人等 `worker.log`、同 session 的審查員等 `review.err`；只靠 bash 與 `/proc`；`max_seconds` 設得比該 host 單次命令逾時短，回 124＝還在跑，再跑一次）。
+   - 等的不是本 session 起的進程（例如換 session 後）：前景跑 `wait-worker.sh`，參數給 log 或 pid（工人 `worker.log`、審查員 `review.err`；輸出行與 exit code 語意見 script 標頭註解，只認 log 最後一行的 `helper exit=<n>`，helper 記的 `proc_start` 會擋 PID 重用誤判）。
+   - 等到逾時才允許一次診斷（pid、log 尾），然後繼續等，或照第 7 點收屍；不要為了看進度去 kill 或重派。
+5. 等到第 4 點的完成信號再讀回執；讀到回執前不轉述、不猜結果。helper 非零退出時，即使有回執也要先查再收。
 6. 改派單指示時，連 helper 實際送出的 prompt 一起看。擷取到的呼叫只證明送了什麼，不證明模型照做。
 7. **卡在 `doing` 的單怎麼收**：
    - helper 非零退出＝失敗：照第 5 點查明原因後可重派。
-   - `worker.log` 的 pid 已不在、也沒有回執＝工人死在半路。先確認真的死了：`ps -o etime=,args= -p <pid>` 要看 args 還是不是那支 helper／工人（PID 會被系統重用）。確認後收屍：停掉它留下的子程序（測試 server、shell）；`git -C <workdir> diff HEAD` 把半套改動存成 `~/.local/state/osslab-manager/<工單名>/partial-<次數>.patch`，再 revert，或在工單寫明繼承哪些；然後挪回 `_tickets/open/`。
+   - `worker.log` 的 pid 已不在、也沒有回執＝工人死在半路。先確認真的死了：`ps -o etime=,args= -p <pid>` 要看 args 還是不是那支 helper／工人（PID 會被系統重用）。確認後收屍：停掉它留下的子程序（測試 server、shell）；`git -C <workdir> diff HEAD` 把半套改動存成工單狀態目錄的 `partial-<次數>.patch`，再 revert，或在工單寫明繼承哪些；然後挪回 `_tickets/open/`。
    - 重派次數與原因記在**同一張工單**的 `重派` 欄，不開新檔。同一張單死兩次就改派備援或拆單。
    - 收屍完成前，不在這個 worktree 疊任何 `T<編號>b` 或下一張單。
 
@@ -114,9 +131,11 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 回執是工人的說法，不是證據。
 
 1. 讀回執與實際 `git status`／`git diff HEAD`（含 staged、untracked），確認只動了允許的檔、沒刪改不該動的；並照實際 diff 重定 `review-tier`（見第五節）。
-2. 工人結束後，每條驗收命令自己重跑，和回執對照；有 UI／API 就實際打一次，需要 prod 的驗證也在這裡由經理做。
+2. 工人結束後，每條驗收命令自己重跑，和回執對照；有 API 就實際打一次，需要 prod 的驗證也在這裡由經理做。重跑範圍就是工單列出的命令：每張單的 `verify-change` 跑工單命令與受影響的 targeted 測試，不含全量；全量（多片、manifest、hash 對帳）整批只在第八節收尾跑一次，不為單張驗收重組全量或複製 runner。
 3. 讀存疑項並處理。
 4. 不過：契約已定 → 寫跟進單 `T<編號>b` 再派；預期結果未定 → 回第一節。
+
+輸出很長的驗收命令用 `scripts/evidence-run.sh <out-dir> <label> -- <命令…>` 包起來：完整 log 與 JSON 信封（cwd、命令、exit、起訖時間、HEAD、`git diff HEAD` 與 untracked 檔的雜湊）存到工單狀態目錄（第三節第 2 點的 `$D`），同名不覆蓋。通過時對話與審查包只引用 JSON 路徑和 exit code，失敗才讀它印的最後 20 行——通過的長 log 讀進對話，之後每一步都要重送。同一串命令寫到第三次、或驗收本身是多片全量時才用；短命令照舊直接跑。分片、manifest 這類跑法仍是各 repo 自己的 runner。
 
 最後一次實作變更後跑 `verify-change`。驗收過了還不提交，先走第五、六節審查，提交在第七節。
 
@@ -131,11 +150,16 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 
 準備審查包：工單與決策來源、回執、完整 diff（凍結成檔：`git diff HEAD`；新增檔先 `git add -N` 才會出現在 diff 裡）、repo 根與固定點 SHA、驗證證據（精確命令、工作目錄、exit code、原始輸出，對應受審版本；豁免要寫理由與未驗範圍）。「測試都過了」這種摘要不算證據。
 
-把審查提示寫進檔案後，一律背景執行（各 runtime 的方式見開頭；可與其他背景工作平行；不要用 `nohup`、`&` 脫離，否則收不到完成通知），輸出存成 `_receipts/<工單名>.review.md`（第二輪 `.review-2.md`，不覆蓋）：
+把審查提示寫進檔案後，一律背景執行，照第三節第 4 點的等法等完（可與其他背景工作平行），輸出存成 `_receipts/<工單名>.review.md`（第二輪 `.review-2.md`，不覆蓋）：
 
 ```bash
-bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <workdir> <prompt-file> \
-  > <workdir>/_receipts/<工單名>.review.md 2> ~/.local/state/osslab-manager/<工單名>/review.err
+# 工單狀態目錄同第三節第 2 點（帶 workdir 雜湊）
+D=~/.local/state/osslab-manager/<工單名>-$(printf '%s' "<workdir>" | sha256sum | cut -c1-8)
+mkdir -p "$D"
+E=$D/review.err
+rc=0; bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <workdir> <prompt-file> \
+  > <workdir>/_receipts/<工單名>.review.md 2> "$E" || rc=$?
+printf '\nhelper exit=%s\n' "$rc" >> "$E"; exit "$rc"
 ```
 
 提示要求：報告第一行就是「審查：grok / grok-4.7 medium @ <時間>」，前面不加開場白；Standards、Spec、Verification 三軸分開；每條附 嚴重度｜`file:line`｜問題｜程式證據｜建議修法；沒把握標「存疑」，沒問題直說不湊數；不得改檔。告訴審查員：它是唯讀，檢查你提供的執行證據即可，自己沒重跑不算驗證失敗；但證據缺漏、過期或不足仍擋驗收，由經理補。審查員仍常在標頭前加一句開場白；內容齊全就在核實段落記一筆，不必重跑。
@@ -151,7 +175,7 @@ bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <workdir> <
 
 核實結論追加在審查報告末尾。Grok 之後照常完成 `code-review`；修改了實作就重跑受影響的驗證與審查。
 
-**經理直修（唯一例外）**：非阻擋的成立 nit，同時符合下列全部條件，經理可以自己改，不派修復單。阻擋級一律走工人（第七節）。
+**經理直修（審查 nit）**：非阻擋的成立 nit，同時符合下列全部條件，經理可以自己改，不派修復單。阻擋級一律走工人（第七節）。
 
 - 審查員已指定 `file:line` 與修法，經理只是照抄，不做設計；
 - 每條不超過約 10 行，只動本單已改過的檔，不新增檔；
@@ -160,6 +184,8 @@ bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <workdir> <
 
 記帳：本單先照第七節提交，直修在派下一張單前完成，改完重跑本單驗收命令，另做一個 commit，body 寫「經理直修：T<N> 第 k 條」，工單的「經理直修」段列出改了哪些檔與行。歸屬交給 `git blame`，總量用 `git log --grep 經理直修` 盤點。
 退場：直修後任一驗收命令失敗 → 撤回直修，本單剩下的成立項全走工人修復單，並在工單記一筆。
+
+**經理直修（文案）**：repo 裡純措辭、只複述程式與既有契約已有行為的描述性文字——README、驗證報告、說明註解——經理可以直接改，單次合計約 20 行內，不新增檔，不必派單。回執、spec／契約、測試、斷言與驗收命令不在內：回執是工人的說法，經理改了就變成證據；spec 改了就是改預期，回第一節。超過 20 行或拿不準的，累積到第八節前合成一張低階單派工人。記帳：不掛在任何工單上、不必重跑工單驗收；另做一個 commit，body 寫「經理直修：文案」，落在第八節整批 `code-review` 範圍內。
 
 ## 七、逐張本機提交（不 push）
 
@@ -175,34 +201,24 @@ bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <workdir> <
 
 push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，看各張單之間的互相影響（例如後一張改了前一張依賴的東西）；token 不是問題時再加一輪 Grok，審查包換成整批 diff 與各單驗證證據。發現問題照第六、七節開修復單處理。
 
-閘門都過、repo 規則允許時才 push 分支並開 PR，PR 說明帶工單號；merge 與部署照 repo 流程並經人同意。清暫存前，把審查結論、各條處置、驗證命令與結果、剩餘限制保存在工單或 PR；秘密要遮，大型原始 log 留 Git 外（`~/.local/state/osslab-manager/`），唯一驗收證據不留在 `/tmp`。盤點建的臨時環境此時清掉。
+閘門都過、repo 規則允許時才 push 分支並開 PR，PR 說明帶工單號；merge 與部署照 repo 流程並經人同意。清暫存前，把審查結論、各條處置、驗證命令與結果、剩餘限制保存在工單或 PR；秘密要遮，大型原始 log 留 Git 外（`~/.local/state/osslab-manager/`），唯一驗收證據不留在 `/tmp`。盤點建的臨時環境此時清掉；`pi-sessions/` 裡已提交或已死鏈的 session 目錄一併刪（helper 只接續「HEAD 未變」的鏈，舊目錄不會再用）。
 
 工單挪到 `_tickets/done/`。用白話告訴使用者：什麼能用了、會注意到什麼變化、還有哪些沒驗；分清「已 merge」與「已實際套用到 runtime」。
 
-## 九、長 session 到段落結束就換
+## 九、長 session 到門檻才換
 
-盤點、一張單從派工到本機提交、一輪審查核實，各算一個段落。產出已經在檔案裡（缺口表、工單、回執、審查報告、commit）才算這個段落結束。工人還在跑，或回執還沒讀完，留在這則。
+每換一次 session，新 session 要重讀 skill 與交接檔、再核一次現況，成本高。符合任一條才換，而且要等工人結束、回執讀完、產出已經在檔案裡（缺口表、工單、回執、審查報告、commit）：
 
-這則已經做完至少一個段落，而且後面還有下一個段落時，換一則新 session。下一個段落不接在這則對話後面寫。
+- PR 已 merge、使用者叫停，或卡在等人決定（第二節那三種停下的情況）；
+- 這則已經跑了約 3 小時；
+- runtime 有回報 context 用量而且超過約 60%；沒有回報就不估。
 
-1. 交接寫到 `~/.local/state/osslab-manager/handoffs/<短名>.md`，不進 git。留下使用者目標原話、已完成到哪一張單、workdir、HEAD、下一件的第一個動作、還沒定的決定、工單寫過的客戶時區。不貼對話，不貼 diff。
-2. 使用者下過持續目標，而且這則經理跑在 Paseo：自己開下一則。持續目標是 Codex `/goal <objective>`，或使用者說的 goal、做到完、自動接力。用 Paseo `create_agent`，同一個 workspace；provider、模型、mode 沿用目前這則，不確定就先 `list_providers` 與 `list_models`。`initialPrompt` 只要下一則先讀交接檔，再做下一件的第一個動作。新 session 若是 Codex，用同一個 objective 再下一次 `/goal`（goal 綁在原來的 thread）。Codex 派工仍要 Full Access。開完把新 agent id 告訴使用者。開不起來就改走第 3 點。
-3. 沒有持續目標，或不在 Paseo：停下。把交接路徑和下面這段開頭交給使用者，請他開新 session。這則不再做下一個段落。
-
-   ```text
-   接手 osslab-manager。先讀 <交接檔>。目標：<原話>。下一件：<第一個動作>。workdir：<路徑> HEAD：<sha>。
-   ```
-
-4. 使用者說留在這則，才繼續。一次只開一則下一手。
-
-**時區**：工人環境不改寫 `TZ`。呼叫端有設就留下，沒設就不補。給團隊看的時間（`claimed-by`、審查 log、回執完成時間、給人的檔名）用 `TZ=Asia/Taipei date` 取一次，不 export 進工人或審查進程。客戶、訂單、排程、信件、對外檔案的時間以工單寫的時區為準；工單沒寫就停下來問。
-
-第五節的 Grok 唯讀審查照舊。換 session、對齊公開 repo，都不改審查員。
+換段的交接檔內容（約 2KB 上限）、Paseo 自開下一則、接手 session 的信任規則：動作前先讀 `docs/handoff.md`。交接檔放 `~/.local/state/osslab-manager/handoffs/<短名>.md`，不進 git。第五節的 Grok 唯讀審查照舊；換 session、對齊公開 repo，都不改審查員。
 
 ## 規矩
 
 - 工人不挪工單、不 commit、不審自己的活；審查員不改檔。
 - 施工只准本 skill 的 helper CLI，不另寫 `workers.md`。宿主的 subagent 不能拿來寫實作：Claude 的 Agent／Task、Codex subagent 都算，Cursor 也不准 Cursor Task 或 `cursor-agent`。這是隔離邊界不是偏好——它們跑在經理的進程裡，沒有乾淨環境、pid 契約與回執協議，等於繞過整個工人隔離設計。
-- 經理只提交自己驗收通過的單；push、PR 照 repo 流程，merge 與部署要人同意。
+- 經理只提交自己驗收通過的單；push、PR 照 repo 流程，merge 與部署要人同意。經理自己寫進 repo 的只有驗收工具（第二節）與直修（第六節），產品碼一律走工人。
 - 使用者中途插話先判斷是新決定還是隨口一說，只有新決定才改計畫。
 - 裝軟體、換工人或模型、把程式碼交給新廠商，都先問人。
