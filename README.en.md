@@ -41,6 +41,7 @@ New in this version:
 - **Reading and answering**: `osrelay questions --owner <owner>` lists open questions in full; `osrelay answer <attempt> --qid <qid> --owner <owner> --text …` replies. Each question is reported once, so a lead that chooses not to answer lets it expire after 12 minutes instead of being woken by every `wait`.
 - **Receipts gain "## 5. 問答" (Q&A)**: the junior lists each question, the lead's reply (or "no manager channel" / "no reply received"), and what it did. Answered questions go here, not in section 4 (risks and doubts), so they do not block the next `--resume`.
 - **"無。" no longer blocks resume**: when Relay checks section 4 of a receipt for doubts, "無" ("none") with one list marker or a trailing full stop ("無。", "- 無") counts as no doubt; "無。但 X 未驗" ("none, but X unverified") or an extra bullet is still a doubt.
+- **Acceptance must fail at the base commit**: a ticket that changes behavior needs at least one acceptance command that fails on the base commit, because of the behavior the ticket changes. The lead runs it before dispatch and records it in the ticket; a command that already passes at the base only guards against regressions. When only the junior's new tests can tell the difference, the lead re-checks during acceptance by running those tests against the base. This came from the benchmark, where one ticket's acceptance already passed at the base, so re-running it caught nothing.
 
 ## Quick start
 
@@ -118,7 +119,10 @@ Relay needs Linux, Python 3.11+ and Git, standard library only; run the runner a
 ## Roadmap
 
 - Configurable time zone (currently fixed to UTC+8).
-- Measure total time and cost for three setups: Opus lead + DeepSeek, Opus lead + Haiku, and Opus 5.5 writing the code itself (see the [worker benchmark](docs/benchmarks/2026-10-11-deepseek-vs-haiku.en.md)).
+- Follow-up comparison (continuing the [worker benchmark](docs/benchmarks/2026-10-11-deepseek-vs-haiku.en.md); list agreed after a GLM-5.3 High cross-review):
+  - **End-to-end cost and time**: A (Opus lead + DeepSeek) and B (Opus lead + Haiku) including the lead's time, tokens and subscription usage for writing tickets, waiting, re-running acceptance and external review; C (Opus 5.5 writing it itself) at effort low and medium; D (Haiku with an Opus advisor via Claude Code `--advisor`, after confirming it works on a subscription), recording how often it actually consults.
+  - **Quality**: compare against the final tests that were accepted at the time, after dropping acceptance commands that already pass at the base.
+  - **Sampling bias and tail latency**: add tickets DeepSeek did not finish in one pass; record the slowest runs (p95) for each setup, not just the median.
 
 ## License
 

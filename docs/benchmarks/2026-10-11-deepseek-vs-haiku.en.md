@@ -32,7 +32,7 @@ Every run that actually worked on a ticket succeeded and passed its verification
 | t4d (Python) | 100 / 147 / 113 s | 183 / 205 s | Haiku 1.7× slower |
 | t1 (Go) | 244 / 286 / 367 s | 416 / 419 s | Haiku 1.5× slower |
 
-DeepSeek itself varied 20–45% between rounds. Haiku's 1,475 s on t5a round 3 was real work: it ran tests as background tasks (7 of them), and each completion made Claude Code start a new turn until the job ended.
+DeepSeek's own slowest round took 19–51% longer than its fastest. Haiku's 1,475 s on t5a round 3 was real work: it ran tests as background tasks (7 of them), and each completion made Claude Code start a new turn until the job ended.
 
 ### Cost per ticket (USD)
 
@@ -44,7 +44,8 @@ DeepSeek itself varied 20–45% between rounds. Haiku's 1,475 s on t5a round 3 w
 
 - On the larger tickets Haiku cost about 2.5× more: it produced about twice DeepSeek's output, roughly two thirds of it thinking tokens, and once a single prompt passed 100K tokens the higher price tier applied (25 of 47 calls in t5a round 1).
 - Haiku actually ran on the Pro subscription and was not billed per token; the table shows what it would cost through the API, from token counts at official prices.
-- "Same tokens at Opus 5.5 prices" is only a rough reference — Opus writing the code itself would take different turns and behave differently. It was not measured.
+- "Same tokens at Opus 5.5 prices" is only a rough reference — Opus writing the code itself would take different turns and behave differently. It was not measured, and it likely overstates the cost: Anthropic measured Opus 5.5 at about $0.12 (low) to $0.29 (high) per solved SWE-bench Pro task ([source](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence), API list prices; different tasks and harness from this test).
+- Claude Code writes 1-hour cache entries, so both the Haiku and Opus columns use 1-hour cache-write prices (per million tokens: Haiku 5.5 $0.20, or the higher tier once a prompt passes 100K; Opus 5.5 $8).
 
 ### Three setups, all three tickets (to be completed)
 
@@ -54,7 +55,7 @@ DeepSeek itself varied 20–45% between rounds. Haiku's 1,475 s on t5a round 3 w
 | B. Opus lead + Haiku junior | Junior 18.1–35.0 min (rounds 1 and 3) | Junior 0.75–0.77 at API prices; actually ran on Pro |
 | C. Opus 5.5 writes it itself | Not measured | Not measured |
 
-This table is incomplete: A and B count only the junior — the lead's (Opus) time and tokens for writing tickets, waiting and reviewing were not measured — and C was not run. **A follow-up test will fill it in**: the same three tickets, A and B including the lead's time and cost, C as headless Opus 5.5 doing the work directly, with total time, total cost and subscription usage side by side.
+This table is incomplete: A and B count only the junior — the lead's (Opus) time and tokens for writing tickets, waiting and reviewing were not measured — and C was not run. **A follow-up test will fill it in**: the same three tickets, A and B including the lead's time and cost, C as headless Opus 5.5 doing the work directly, with total time, total cost and subscription usage side by side. The full follow-up list is in the [README roadmap](../../README.en.md#roadmap).
 
 ### Subscription usage (Haiku)
 
@@ -62,11 +63,11 @@ Each ticket used about 1–2% of the Claude Pro 5-hour window (t5a round 3 ran 2
 
 ### Quality
 
-Every run passed its verification commands. **That is not enough to compare quality**: t1's commands already pass on the base commit, and the check against the final accepted tests did not complete. This report does not judge which worker did better.
+Every run passed its verification commands. **That is not enough to compare quality**: t1's commands already pass on the base commit, and the check against the final accepted tests did not complete. This report does not judge which worker did better. osslab-manager now requires at least one acceptance command that fails at the base commit for any ticket that changes behavior.
 
 ## Limitations
 
-- Small sample: three tickets, three rounds, all small to medium (2–6 minutes for DeepSeek).
+- Small sample: three tickets, three rounds, all small to medium (2–6 minutes for DeepSeek), and all tickets DeepSeek originally finished in one pass, which favours it.
 - Quality was not compared (see above).
 - "Opus 5.5 writes it itself" was not measured, and the lead's cost was not counted; both come in the follow-up test (see "Three setups").
 - Haiku's subscription usage is affected by other sessions on the same account.
