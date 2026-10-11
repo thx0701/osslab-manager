@@ -63,7 +63,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 
 例：「把 FB 賣貨便上架補到 spec 完整覆蓋。不含金流與物流。做完每個品項在賣場都看得到對應規格與狀態。正本：`docs/listing-spec.md`。」
 
-未定的業務規則（錢、權限、違約條款…）技術長會一次一題回來問你——那不是摩擦，是管線在擋「AI 發明業務規則」。操作者一頁說明：[docs/operator-guide.md](docs/operator-guide.md)。
+未定的業務規則（錢、權限、違約條款…）技術長會整理成一輪題目回來問你（每題附建議）——那不是摩擦，是管線在擋「AI 發明業務規則」。操作者一頁說明：[docs/operator-guide.md](docs/operator-guide.md)。
 
 ## 實測
 

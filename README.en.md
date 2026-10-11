@@ -59,7 +59,7 @@ New in this version:
 2. **Success signal**: what you will observe when it is done. This is the lead's acceptance anchor; you do not write the commands.
 3. **Authoritative contract**: which spec or document is the source of truth. Settled decisions are reused, not re-asked.
 
-Open business rules (money, permissions, penalties…) come back to you one at a time — that is not friction, it is the pipeline stopping "AI invents a business rule". One-page operator guide: [docs/operator-guide.md](docs/operator-guide.md).
+Open business rules (money, permissions, penalties…) come back to you as one round of questions, each with a recommendation — that is not friction, it is the pipeline stopping "AI invents a business rule". One-page operator guide: [docs/operator-guide.md](docs/operator-guide.md).
 
 ## Field results
 
