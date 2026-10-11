@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import time
-from .artifacts import RelayError, alive
+from .artifacts import RelayError, alive, now
 from .store import Store, TERMINAL
 
 DEFAULT_SKILL = Path.home() / '.agents/skills/osslab-manager'
@@ -55,7 +55,7 @@ def question_message(items):
         q = item['question']
         lines.append(f"{item['attempt']} qid={item['qid']} kind={q['kind']} where={q['where'][:120]} "
                      f"deadline={item['deadline']}")
-    return ('Worker question pending (reported once): ' + ' | '.join(lines) +
+    return ('Worker question pending (new to this wait; another wait may have reported it too): ' + ' | '.join(lines) +
             '. Read: osrelay questions --owner <owner>; reply: osrelay answer <attempt> --qid <qid> '
             '--owner <owner> --text <answer>; then wait again.')
 
@@ -115,8 +115,8 @@ def parser():
                             help="Continue this task's latest pi session; refused when it cannot be continued")
         if action == 'review':
             sp.add_argument('--prompt', required=True)
-            sp.add_argument('--engine', choices=('grok', 'codex', 'glm'), default='grok',
-                            help='Review engine in priority order: grok, then codex, then glm; '
+            sp.add_argument('--engine', choices=('codex', 'glm', 'grok'), default='codex',
+                            help='Review engine in priority order: codex, then glm, then grok; '
                                  'model and effort come from the skill helper')
         if action == 'block':
             sp.add_argument('--reason', required=True)
@@ -234,9 +234,10 @@ def execute(store, args, command):
         return store.cancel(args.attempt, args.owner, args.note)
     if action == 'wait':
         deadline = time.monotonic() + max(0, args.timeout)
+        started = now()
         while True:
             attempt = store.attempt(args.attempt)
-            fresh = store.notify_questions(args.attempt)
+            fresh = store.notify_questions(args.attempt, since=started)
             if fresh:
                 # Before a terminal result too: the asking worker waits at most until its deadline.
                 raise RelayError('question_pending', question_message(fresh), {'questions': fresh})

@@ -14,7 +14,7 @@ OSSLab manager 的經理目前手動保管 pid、log、attempt、回執與交接
 
 1. 經理以 repo、工單、穩定 owner 建立任務，重開 session 後能查到狀態、歷史、回執與下一步。工單 ID 全域唯一，workdir 以真實 Git 根路徑正規化。
 2. run/review/verify 使用明確 idempotency key。相同 key＋相同請求回同一 attempt；相同 key 不同請求拒絕。不同任務不能同時占用同一 worktree。worker 和 review/verify 也不得交錯寫同一 worktree。
-3. 每次 attempt 凍結工單、整份 skill、路由模型資訊與輸入／輸出證據。路由模型以 helper 為正本，不另外新增模型呼叫方式。使用者定案擴充 `review --engine grok|glm`，預設 Grok；GLM 審查用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，`run --engine glm` 仍用 GLM-5.3-Flash 工人。後續使用者再加 `review --engine codex`（Codex 唯讀沙箱跑 GPT-6 Astra medium）：審查優先序 Grok → Codex → GLM，三者都可手動指定；換下一順位由經理決定，Relay 不自動 fallback。`codex` 只當審查，不是工人 engine，也不同於任務的 `--runtime codex`（經理）。路由以 kind 區分，engine 也屬於冪等請求。
+3. 每次 attempt 凍結工單、整份 skill、路由模型資訊與輸入／輸出證據。路由模型以 helper 為正本，不另外新增模型呼叫方式。使用者定案擴充 `review --engine grok|glm`，預設 Grok；GLM 審查用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，`run --engine glm` 仍用 GLM-5.3-Flash 工人。後續使用者再加 `review --engine codex`（Codex 唯讀沙箱跑 GPT-6 Astra medium）：審查優先序原為 Grok → Codex → GLM；Grok 停訂後使用者改定 Codex → GLM → Grok，`review` 預設 engine 改為 `codex`，三者都可手動指定；換下一順位由經理決定，Relay 不自動 fallback。`codex` 只當審查，不是工人 engine，也不同於任務的 `--runtime codex`（經理）。路由以 kind 區分，engine 也屬於冪等請求。
 4. 獨立 `serve` 擁有執行生命週期。經理 CLI 退出不影響已排程工作；程序 PID 必須搭配 starttime 與 boot id。完成結果先原子寫檔，daemon 重啟可重新收取；不假裝 OS spawn 與 SQLite 是同一交易。
 5. 啟動後尚未登錄程序就中斷、程序消失且無結果等狀況進 recovery_required，不自動重派。進程仍活著或工作樹鎖仍有人持有時不可 recover。recover 先用既有 helper 建立完整備份，成功後由經理明確選擇繼承現況，再允許新 attempt；不自動 reset/clean/kill。
 6. 工單與 review prompt 不得是 worktree 內未追蹤且未 ignore 的檔（會改變指紋），create／review 拒絕。

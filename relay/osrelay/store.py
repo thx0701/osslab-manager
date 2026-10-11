@@ -312,13 +312,13 @@ class Store:
     def enqueue(self, task_id, actor, key, kind, skill, engine=None, prompt=None, command=None, note=None, resume=False):
         required(key, "key")
         skill = Path(skill).expanduser().resolve(strict=True)
-        engine = engine or ("grok" if kind == "review" else "pi")
+        engine = engine or ("codex" if kind == "review" else "pi")
         if kind == "worker" and engine not in ("pi", "glm"):
             raise RelayError("invalid_engine", "worker must be pi or glm")
         if resume and (kind != "worker" or engine != "pi"):
             raise RelayError("resume_refused", "Resume is only for the pi worker")
-        if kind == "review" and engine not in ("grok", "codex", "glm"):
-            raise RelayError("invalid_engine", "review must be grok, codex or glm")
+        if kind == "review" and engine not in ("codex", "glm", "grok"):
+            raise RelayError("invalid_engine", "review must be codex, glm or grok")
         if kind == "verify" and not command:
             raise RelayError("missing_command", "verify needs -- command arguments")
         if kind == "review" and not prompt:
@@ -645,20 +645,26 @@ class Store:
             args = (owner,)
         return [question_view(row) for row in self.db.execute(sql + " ORDER BY q.asked,q.qid", args)]
 
-    def notify_questions(self, attempt_id):
-        """Pending questions of the same owner not yet reported by any wait; each is reported once."""
+    def notify_questions(self, attempt_id, since=None):
+        """Pending questions of the same owner this wait reports: ones no wait has reported yet (each once), and,
+        with since, ones asked after this wait began even if another wait already reported them. A manager blocked
+        in one wait cannot read another wait's exit 5, so a running wait must not miss a new question."""
         owner = self.task(self.attempt(attempt_id)["task_id"])["owner"]
+        pending = self.questions(owner)
         fresh = []
         # The filter only spares a write transaction per poll; the UPDATE guard decides between concurrent waits.
-        pending = [item for item in self.questions(owner) if item["notified"] is None]
-        if pending:
+        unreported = [item for item in pending if item["notified"] is None]
+        if unreported:
             with self.tx():
-                for item in pending:
+                for item in unreported:
                     if self.db.execute("UPDATE questions SET notified=? WHERE attempt_id=? AND qid=? "
                                        "AND notified IS NULL AND state='pending'",
                                        (now(), item["attempt"], item["qid"])).rowcount:
                         fresh.append(item)
-        return fresh
+        if since is not None:
+            seen = {(item["attempt"], item["qid"]) for item in fresh}
+            fresh += [item for item in pending if item["asked"] >= since and (item["attempt"], item["qid"]) not in seen]
+        return sorted(fresh, key=lambda item: (item["asked"], item["qid"]))
 
     def withdraw_questions(self, attempt_id):
         """Called inside reconcile's transaction when an attempt reaches a terminal status."""

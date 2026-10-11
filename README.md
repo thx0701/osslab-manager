@@ -19,7 +19,7 @@
 | junior（同模型退路） | 同上，改走 OpenRouter | RunInfra 暫停、額度或速率限制時用 `scripts/pi-openrouter-worker.sh` |
 | junior（備援） | ZCode CLI＋GLM-5.3-Flash（BigModel Coding Plan） | DeepSeek 驗收不過且像是模型能力時；`scripts/zcode-cloud-worker.sh` |
 | junior（指定才派） | Claude Code 無頭＋claude-haiku-5-5（本機訂閱） | 只手動派工，不進 Relay；`scripts/claude-haiku-worker.sh` |
-| 外部審查 | 依序 **Grok 4.7** medium → **Codex** GPT-6 Astra medium → **GLM-5.3** max，都可指定 | 唯讀：Grok、GLM 只給 Read／Grep，Codex 走唯讀沙箱；`scripts/grok-readonly-review.sh`、`scripts/codex-readonly-review.sh`、`scripts/zcode-readonly-review.sh` |
+| 外部審查 | 依序 **Codex** GPT-6 Astra medium → **GLM-5.3** max → **Grok 4.7** medium（已停訂），都可指定 | 唯讀：Codex 走唯讀沙箱，GLM、Grok 只給 Read／Grep；`scripts/codex-readonly-review.sh`、`scripts/zcode-readonly-review.sh`、`scripts/grok-readonly-review.sh` |
 
 Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Claude Code、Codex 上驗過。
 
@@ -39,8 +39,8 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 ## 近期更新（2026-10）
 
 - **pi junior 改走 RPC 驅動程式**：`scripts/pi-worker-driver.py` 以 `pi --mode rpc` 啟動 pi，取代原本整輪結束才輸出的 `-p` 文字模式。驅動程式負責即時進度、轉接發問，並照文字模式判斷成敗（模型出錯時 pi 自己仍回 0，驅動程式改回 exit 1）；訊號轉送、父程序死掉 pi 跟著收尾、Relay 的 worktree 鎖都照舊。
-- **`osrelay wait` 退出碼一覽**：0 查詢成功（成敗仍看 `result.status`）、3 等候逾時（工作照跑）、4 日誌靜默 900 秒、5 有題待答。4 與 5 都只通知一次：4 是同一組日誌大小只報一次，5 是每一題只報一次；5 先於其他結果回報。
-- **讀題與回答**：`osrelay questions --owner <owner>` 列出待答題目全文，`osrelay answer <attempt> --qid <qid> --owner <owner> --text …` 回覆。每題只通知一次，技術長不想答就讓它 12 分鐘後逾時，不會每次 `wait` 都被叫醒。
+- **`osrelay wait` 退出碼一覽**：0 查詢成功（成敗仍看 `result.status`）、3 等候逾時（工作照跑）、4 日誌靜默 900 秒、5 有題待答。4 與 5 都只通知一次：4 是同一組日誌大小只報一次，5 是每一題只報一次；例外是已經在跑的 `wait` 會回報它開始後才問的題（就算背景等待已報過），技術長前景等審查時也接得到別條鏈的發問。5 先於其他結果回報。
+- **讀題與回答**：`osrelay questions --owner <owner>` 列出待答題目全文，`osrelay answer <attempt> --qid <qid> --owner <owner> --text …` 回覆。每題只通知一次（已經在跑的 `wait` 例外，見上一條），技術長不想答就讓它 12 分鐘後逾時，之後才開始的 `wait` 不會再被同一題叫醒。
 - **回執新增「## 5. 問答」**：junior 逐題列出題目、技術長的回覆（或「沒有經理通道」「沒有收到經理回覆」）、照回覆做了什麼。已答的題目寫在這裡，不放第 4 節「風險與存疑」，免得擋住下一輪 `--resume`。
 - **「無。」不再擋接續**：Relay 判斷回執第 4 節有沒有存疑時，「無」加一個清單符號或結尾句號（「無。」「- 無」）都算沒有存疑；「無。但 X 未驗」或多列一條仍算存疑。
 - **驗收要在起點失敗**：會改變行為的工單，至少一條驗收命令要在起點 commit 失敗，而且是因為這張單要改的行為；技術長派單前先跑一次寫進工單，起點就會過的命令只算回歸保護。靠 junior 新寫的測試才分辨得出時，驗收時把新測試放回起點版本補驗。起因是實測發現有一張單的驗收在起點就會過，重跑也擋不住。
@@ -52,7 +52,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
    - `~/.openclaw/secrets/glm-5.3-flash.env`：`GLM_53_FLASH_API_KEY=...`（RunInfra，預設 junior）
    - `~/.openclaw/secrets/openrouter.env`：`OPENROUTER_API_KEY=...`（OpenRouter 退路）
    - `~/.openclaw/secrets/glm-coding-plan.env`：`ZHIPU_API_KEY=...`（GLM 備援與 GLM 審查）
-3. 本機需要 `pi`（0.99 以上，RPC 模式）、`python3`；審查用 `grok`、`codex`（ChatGPT 登入）；GLM 備援與審查用 `zcode`（路徑可用 `ZCODE_CLI_BIN` 覆蓋）。
+3. 本機需要 `pi`（0.99 以上，RPC 模式）、`python3`；審查用 `codex`（ChatGPT 登入），選用 `grok`；GLM 備援與審查用 `zcode`（路徑可用 `ZCODE_CLI_BIN` 覆蓋）。
 4. 安裝 Relay：`cd relay && python3 deploy/install-user.py`，再照 [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md) 啟用 `osrelay.service`。施工中問答只在 Relay 派工時有；沒裝 Relay 時技術長照 `docs/manual-dispatch.md` 手動派工，junior 發問會立刻得到「沒有經理通道」。
 5. 在 Claude Code 或 Codex 對話裡說「托管」「走工單」「派出去」，丟出帶三要素的 goal。
 
@@ -103,7 +103,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 
 ## 與 upstream（yanauto/opus-manager）的差異
 
-- 工人路由預先定好：DeepSeek（RunInfra）預設、OpenRouter 退路、GLM 備援、唯讀審查依序 Grok → Codex → GLM；Claude Haiku 只在指定時手動派工
+- 工人路由預先定好：DeepSeek（RunInfra）預設、OpenRouter 退路、GLM 備援、唯讀審查依序 Codex → GLM → Grok；Claude Haiku 只在指定時手動派工
 - Relay 帳本：派工、等待、恢復、交接、驗收與提交核對都有程式化的證據指紋
 - 即時進度與施工中問答（pi RPC 驅動程式＋`ask_manager` 擴充）
 - 先量再問：盤點產出缺口表，人選範圍；拆單「人管範圍、技術長管粒度」

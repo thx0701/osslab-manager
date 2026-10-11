@@ -17,7 +17,7 @@ This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the 
 | Junior (same model, fallback provider) | Same, via OpenRouter | When RunInfra is paused or rate/quota limited: `scripts/pi-openrouter-worker.sh` |
 | Junior (backup) | ZCode CLI + GLM-5.3-Flash (BigModel Coding Plan) | When DeepSeek fails acceptance for what looks like model capability: `scripts/zcode-cloud-worker.sh` |
 | Junior (only when asked) | headless Claude Code + claude-haiku-5-5 (local subscription) | Manual dispatch only, not routed by Relay: `scripts/claude-haiku-worker.sh` |
-| External review | In order: **Grok 4.7** medium → **Codex** GPT-6 Astra medium → **GLM-5.3** max; any can be requested | Read-only: Grok and GLM get Read/Grep only, Codex runs in its read-only sandbox; `scripts/grok-readonly-review.sh`, `scripts/codex-readonly-review.sh`, `scripts/zcode-readonly-review.sh` |
+| External review | In order: **Codex** GPT-6 Astra medium → **GLM-5.3** max → **Grok 4.7** medium (subscription ended); any can be requested | Read-only: Codex runs in its read-only sandbox, GLM and Grok get Read/Grep only; `scripts/codex-readonly-review.sh`, `scripts/zcode-readonly-review.sh`, `scripts/grok-readonly-review.sh` |
 
 Cursor and ZCode do not act as tech lead: waiting, handoff and mid-task questions are verified only on Claude Code and Codex.
 
@@ -37,8 +37,8 @@ New in this version:
 ## Recent changes (2026-10)
 
 - **pi juniors now run through an RPC driver**: `scripts/pi-worker-driver.py` starts pi with `pi --mode rpc`, replacing the `-p` text mode that printed nothing until the run ended. The driver writes live progress, relays questions, and decides success the way text mode did (pi itself still exits 0 on a model error; the driver turns that into exit 1). Signal forwarding, pi exiting when its parent dies, and Relay's worktree lock are unchanged.
-- **`osrelay wait` exit codes**: 0 the query succeeded (check `result.status` for the outcome), 3 wait timeout (the work keeps running), 4 logs silent for 900 seconds, 5 a question is waiting. Both 4 and 5 are reported once: 4 once per set of log sizes, 5 once per question; 5 is reported before any other result.
-- **Reading and answering**: `osrelay questions --owner <owner>` lists open questions in full; `osrelay answer <attempt> --qid <qid> --owner <owner> --text …` replies. Each question is reported once, so a lead that chooses not to answer lets it expire after 12 minutes instead of being woken by every `wait`.
+- **`osrelay wait` exit codes**: 0 the query succeeded (check `result.status` for the outcome), 3 wait timeout (the work keeps running), 4 logs silent for 900 seconds, 5 a question is waiting. Both 4 and 5 are reported once: 4 once per set of log sizes, 5 once per question, except that a `wait` already running also reports questions asked after it began (even if a background wait reported them), so a lead blocked on a review still hears from other chains. 5 is reported before any other result.
+- **Reading and answering**: `osrelay questions --owner <owner>` lists open questions in full; `osrelay answer <attempt> --qid <qid> --owner <owner> --text …` replies. Each question is reported once (except to a `wait` already running, see above), so a lead that chooses not to answer lets it expire after 12 minutes; a `wait` started later is not woken by it again.
 - **Receipts gain "## 5. 問答" (Q&A)**: the junior lists each question, the lead's reply (or "no manager channel" / "no reply received"), and what it did. Answered questions go here, not in section 4 (risks and doubts), so they do not block the next `--resume`.
 - **"無。" no longer blocks resume**: when Relay checks section 4 of a receipt for doubts, "無" ("none") with one list marker or a trailing full stop ("無。", "- 無") counts as no doubt; "無。但 X 未驗" ("none, but X unverified") or an extra bullet is still a doubt.
 - **Acceptance must fail at the base commit**: a ticket that changes behavior needs at least one acceptance command that fails on the base commit, because of the behavior the ticket changes. The lead runs it before dispatch and records it in the ticket; a command that already passes at the base only guards against regressions. When only the junior's new tests can tell the difference, the lead re-checks during acceptance by running those tests against the base. This came from the benchmark, where one ticket's acceptance already passed at the base, so re-running it caught nothing.
@@ -50,7 +50,7 @@ New in this version:
    - `~/.openclaw/secrets/glm-5.3-flash.env`: `GLM_53_FLASH_API_KEY=...` (RunInfra, default junior)
    - `~/.openclaw/secrets/openrouter.env`: `OPENROUTER_API_KEY=...` (OpenRouter fallback)
    - `~/.openclaw/secrets/glm-coding-plan.env`: `ZHIPU_API_KEY=...` (GLM backup and GLM review)
-3. Install `pi` (0.99 or later, RPC mode) and `python3`; `grok` and `codex` (signed in with ChatGPT) for review; `zcode` for the GLM backup and review (override its path with `ZCODE_CLI_BIN`).
+3. Install `pi` (0.99 or later, RPC mode) and `python3`; `codex` (signed in with ChatGPT) for review, `grok` optional; `zcode` for the GLM backup and review (override its path with `ZCODE_CLI_BIN`).
 4. Install Relay: `cd relay && python3 deploy/install-user.py`, then enable `osrelay.service` per [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md). Mid-task questions exist only under Relay; without it the lead dispatches by hand per `docs/manual-dispatch.md`, and a junior that asks gets "no manager channel" immediately.
 5. In Claude Code or Codex, say "托管" / "走工單" / "派出去" (or ask it to use osslab-manager) and give a goal with the three essentials.
 
@@ -99,7 +99,7 @@ Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does 
 
 ## Differences from upstream (yanauto/opus-manager)
 
-- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, read-only review in the order Grok → Codex → GLM; Claude Haiku only by explicit manual dispatch
+- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, read-only review in the order Codex → GLM → Grok; Claude Haiku only by explicit manual dispatch
 - Relay ledger: dispatch, waiting, recovery, handoff, acceptance and commit checks with programmatic evidence fingerprints
 - Live progress and mid-task questions (pi RPC driver + `ask_manager` extension)
 - Measure first, then ask: inventory produces a gap table; humans own scope, the lead owns granularity

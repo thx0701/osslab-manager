@@ -28,23 +28,23 @@ osrelay context ticket-001 --runtime codex
 ```
 
 所有輸出是 JSON。退出碼 0 表示 CLI 操作成功，**不是任務驗收通過**；例如 `wait`
-成功傳回 `failed` attempt 仍退出 0。退出碼 3 是等候逾時，工作繼續；4 是日誌靜默 900 秒（只通知一次）；5 是同一 owner 的工人在發問（每題只通知一次）；一般執行錯誤退出 1，命令列用法錯誤退出 2。
+成功傳回 `failed` attempt 仍退出 0。退出碼 3 是等候逾時，工作繼續；4 是日誌靜默 900 秒（只通知一次）；5 是同一 owner 的工人在發問（沒被任何 wait 回報過的題目只回報一次；這次 wait 開始後才問的題目，就算別的 wait 已回報過也會回報）；一般執行錯誤退出 1，命令列用法錯誤退出 2。
 查看 `result.status`、`result.state` 與錯誤 `error.code` 判斷下一步。
 
 ## 模型與驗收
 
 每次 attempt 複製整份 skill，記錄 helper hash、工單、route、程序身份、stdout/stderr 與結果。
 工人預設 pi／DeepSeek v4.1 Flash high；經理可明確指定 `--engine glm` 使用 skill 的 GLM-5.3-Flash。
-`review` 依優先序：預設 Grok 4.7 medium；`--engine codex` 用 Codex 唯讀沙箱跑 GPT-6 Astra medium；`--engine glm` 用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，與 GLM-5.3-Flash 工人分開路由。三者都可手動指定；Grok 不能用時由經理改派下一順位。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。`--engine codex` 是審查員，和任務的 `--runtime codex`（Codex 當經理）無關。
+`review` 依優先序：預設 `codex`（Codex 唯讀沙箱跑 GPT-6 Astra medium）；`--engine glm` 用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，與 GLM-5.3-Flash 工人分開路由；`--engine grok` 是 Grok 4.7 medium（已停訂，到期前可用）。三者都可手動指定；前一順位不能用時由經理改派下一順位。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。`--engine codex` 是審查員，和任務的 `--runtime codex`（Codex 當經理）無關。
 本專案交付的外部審查另由使用者指定 GLM-5.3。
 
 ```sh
 osrelay verify ticket-001 --owner project-manager --key verification-1 -- make test
 osrelay review ticket-001 --owner project-manager --key review-1 --prompt /path/to/review-prompt.md
-# Grok 不能用或指定 Codex 審查時
-osrelay review ticket-001 --owner project-manager --key review-codex-1 --engine codex --prompt /path/to/review-prompt.md
-# 再下一順位，或指定完整 GLM-5.3 Max 審查時
+# Codex 不能用或指定完整 GLM-5.3 Max 審查時
 osrelay review ticket-001 --owner project-manager --key review-glm-1 --engine glm --prompt /path/to/review-prompt.md
+# 再下一順位，或指定 Grok 時
+osrelay review ticket-001 --owner project-manager --key review-grok-1 --engine grok --prompt /path/to/review-prompt.md
 # 等待各 attempt 結束、逐條閱讀並核實證據後
 osrelay accept ticket-001 --owner project-manager --note '已核實驗證與審查，逐項符合工單'
 # accept 通過 state=accepted，保留 worktree 占用；經理自行 commit 後再 finalize
@@ -61,7 +61,7 @@ accepted base 的直接單親子提交；沒有 diff 的驗收允許在原 HEAD 
 
 `accept` 要求目前 Git 指紋與成功驗證／review 一致，且證據檔未被換掉。這個 task 驗過的**每一條不同命令**，
 最新一次都必須在目前版本通過；後跑的命令通過不能蓋掉先前失敗的命令。
-低階工單（只走 code-review、不跑 Grok）可 `accept ... --review-waiver '<理由>'`；該 task 一旦跑過 review
+低階工單（只走 code-review、不跑外部審查）可 `accept ... --review-waiver '<理由>'`；該 task 一旦跑過 review
 （成功或失敗）就不能再豁免，審查分級只升不降。
 
 工單與 review prompt 若放在 worktree 內，必須已 git-ignore 或已提交；未追蹤檔會算進指紋，

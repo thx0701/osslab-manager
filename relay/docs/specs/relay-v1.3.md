@@ -18,7 +18,7 @@
 3. 經理：
    - `wait <attempt>` 發現**同 owner** 任一 running attempt 有尚未通知過的待答題目，就以退出碼 5 返回，
      `error.code=question_pending`，`error.message` 含 attempt、qid、kind、where 摘要與 deadline，`error.details.questions` 附全文。
-     先於終態與逾時判斷。每一題只通知一次：不答、讓它逾時的話，之後的 `wait` 不會為它再返回 5。
+     先於終態與逾時判斷。每一題只通知一次：不答、讓它逾時的話，之後的 `wait` 不會為它再返回 5。例外是已經在跑的 `wait`：它開始之後才出現的題目，就算已被別的 `wait`（例如背景等待）回報過，它也要返回 5。Claude 經理卡在一個前景 `wait` 時讀不到背景 `wait` 的退出碼，2026-10-11 實際因此兩題拖到接近 12 分鐘期限。
    - `questions [--owner X]` 列 running attempt 上的待答題目全文。
    - `answer <attempt> --qid Q --owner X --text …`：owner 不符回 `owner_mismatch`；題目已答、已過 deadline、或 attempt 已結束
      回 `question_expired`（過期或結束的原因同時記下來）。回答視為工單補充，事件為正本。

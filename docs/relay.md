@@ -2,7 +2,7 @@
 
 適用已安裝 `osrelay` 的主機上當經理的 Codex／Claude Code（Paseo 或一般終端機皆可；本 skill 只支援這兩種經理）。經理照 SKILL.md 做盤點、拆單、判斷與逐張本機提交；
 Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿用 session 設定。
-施工預設 pi，備援明確 `--engine glm`，review 依序 Grok → `--engine codex`（GPT-6 Astra medium）→ `--engine glm`（完整 GLM-5.3 max），三者都可指定（見 SKILL 第五節；`--engine codex` 是審查員，跟任務的 `--runtime codex` 無關）。Claude Haiku 不在 `osrelay` 的引擎表裡，不要用手動 helper 繞過進行中的 Relay 任務。模型正本是本 skill helper
+施工預設 pi，備援明確 `--engine glm`，review 依序 Codex（預設，GPT-6 Astra medium）→ `--engine glm`（完整 GLM-5.3 max）→ `--engine grok`（已停訂，到期前可用），三者都可指定（見 SKILL 第五節；`--engine codex` 是審查員，跟任務的 `--runtime codex` 無關）。Claude Haiku 不在 `osrelay` 的引擎表裡，不要用手動 helper 繞過進行中的 Relay 任務。模型正本是本 skill helper
 （`osrelay doctor` 的 routes 會列出實際值），每個 attempt 凍結整份 skill。
 
 先 `osrelay doctor`、`osrelay list`。查既有任務的 `context <task> --runtime codex|claude`，
@@ -50,7 +50,7 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
    退出 3（仍在跑）就再跑同一個 cell。使用者插話打斷時，回應完立刻回去等同一個 attempt（SKILL.md 第三節第 4 點）。
    CLI 退出 3 是等候逾時，**不是工人失敗**；退出 0 只表示查詢成功，仍須看 `result.status`。
    退出 4（`wait_silent`）是另一件事：`stdout.log` 與 `stderr.log` 的大小連續 900 秒沒變，attempt 仍在跑，沒有取消。同一組大小只回報一次。經理這時做一次診斷（pid、log 尾），不 kill、不重派，然後再跑同一個 wait。日誌有新內容之後又靜默 900 秒，才會再回報一次；靜默期間不會每 15 分鐘再響。pi 工人每個工具起訖、每則模型回覆、每次重試與壓縮都即時寫一行（`scripts/pi-worker-driver.py`），所以 pi 的靜默代表單一命令、單一輪生成或重試等待已超過 900 秒，log 尾最後一行就是停在哪裡。這不是工人失敗，也不是把查看改成經理輪詢。
-   退出 5（`question_pending`）：同一 owner 底下有 pi 工人在施工中發問，正在等答案；`error.message` 已有 attempt、qid、kind 與摘要，`error.details.questions` 有全文。依 SKILL.md 第三節「回答工人發問」的權限 `osrelay answer <attempt> --qid <qid> --owner <角色> --text …`，答不了就回「這部分停下、寫進回執」；然後再跑同一個 wait。每題只通知一次，不答就會在 12 分鐘後逾時，工人照原規則停下受影響部分；不 kill、不重派。等答案期間工人 log 會有「等經理回覆」一行，720 秒逾時短於 900 秒靜默警報。
+   退出 5（`question_pending`）：同一 owner 底下有 pi 工人在施工中發問，正在等答案；`error.message` 已有 attempt、qid、kind 與摘要，`error.details.questions` 有全文。依 SKILL.md 第三節「回答工人發問」的權限 `osrelay answer <attempt> --qid <qid> --owner <角色> --text …`，答不了就回「這部分停下、寫進回執」；然後再跑同一個 wait。每題只通知一次（例外：已經在跑的 wait 會回報它開始後才問的題，就算背景等待已回報過；之後才開始的 wait 不重報），不答就會在 12 分鐘後逾時，工人照原規則停下受影響部分；不 kill、不重派。等答案期間工人 log 會有「等經理回覆」一行，720 秒逾時短於 900 秒靜默警報。
    等 terminal status 才讀該 attempt 目錄的 receipt.md、stdout.log、stderr.log、result.json。退出 4 的那一次診斷可以看 log 尾，看完就回到等待，不把整份 log 讀進對話。
 5. worker succeeded 只到 awaiting_acceptance。經理照原 skill 逐項核實實際 diff、回執與業務驗收；
    工單每條驗收命令各跑一次 `verify <task> --owner <角色> --key <驗證鍵> -- <命令...>`，等待並核對 schema 2 證據。
@@ -58,7 +58,7 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
    沒有 active attempt 時先逐檔 `git add -N -- <允許的新增檔>`，再下 verify 指令；排隊後也不能改 index。
 6. 審查包仍照原 skill 寫。`review <task> --owner <角色> --key <審查鍵> --prompt <審查包>`，
    等待、讀完整報告、逐條核實。非空報告不代表無 findings；需要修正就新 run，之後重驗重審。
-   review 不帶 engine 是 Grok；換 Codex 或 GLM 加 `--engine codex`／`--engine glm`，工人 glm 路由仍是 Flash。每次重跑 run／verify／review 都用新 key；原 key 只重送同一請求。
+   review 不帶 engine 是 Codex；換 GLM 或 Grok 加 `--engine glm`／`--engine grok`，工人 glm 路由仍是 Flash。每次重跑 run／verify／review 都用新 key；原 key 只重送同一請求。
    Relay 比第六節嚴：工作樹一變，舊 review 就不算數，機械修復也要新跑一輪 review 才能 accept。
    低階單（第五節）不跑外部審查，accept 時加 `--review-waiver <低階理由>`；該 task 跑過任何 review 後就不能豁免。
 7. 已核實才 `accept <task> --owner <角色> --note <核實結論>`。Relay 檢查每條 verify 與最新 review（或豁免）成功、

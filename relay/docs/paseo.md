@@ -66,14 +66,14 @@ Relay 路徑用 SQLite 狀態，原 Markdown 工單不挪動；CLI 傳入凍結�
   一次呼叫等到 attempt 結束；退出 3（仍在跑）就再跑同一個 cell。
 - 其他 host：前景 `wait`，`--timeout` 設得比該 host 單次命令上限短。
 
-退出 5（`question_pending`）表示同一 owner 底下有工人在施工中發問、正在等答案（12 分鐘逾時）。`osrelay questions --owner <owner>` 讀全文，依 osslab-manager 的權限規則 `osrelay answer <attempt> --qid <qid> --owner <owner> --text …`，再回去等原本那個 attempt。每題只通知一次；答不了就回「這部分停下、寫進回執」，不要 kill 或重派。
+退出 5（`question_pending`）表示同一 owner 底下有工人在施工中發問、正在等答案（12 分鐘逾時）。`osrelay questions --owner <owner>` 讀全文，依 osslab-manager 的權限規則 `osrelay answer <attempt> --qid <qid> --owner <owner> --text …`，再回去等原本那個 attempt。每題只通知一次，但已經在跑的 `wait` 會回報它開始後才出現的題目（就算背景等待已回報過），所以前景等著審查時也接得到別條鏈的發問；答不了就回「這部分停下、寫進回執」，不要 kill 或重派。
 
 工人 attempt 成功只表示 helper 完成且有回執；經理繼續 verify → review → 核實 → accept。
 accept 通過後 `state=accepted` 並保留 worktree 占用；經理依原 skill 自行逐張本機 commit，
 再 `osrelay finalize <task> --owner ... --commit <SHA> --note ...`，核對 SHA 是目前 HEAD、
 工作樹乾淨且提交 tree 等於 accept 時的預期 tree 後才收尾並釋放。Relay 不代 commit。
 review findings 若需修改，再 run 新 key、重驗重審。
-review 優先序 Grok → Codex（GPT-6 Astra medium）→ GLM（完整 GLM-5.3 Max），三者都可用 `--engine` 手動指定；`run --engine glm` 仍是 Flash 工人。`doctor` 依已安裝 skill 列路由，舊 skill 沒有 Codex／GLM review helper 時只列有的；指定前先確認已安裝對應 helper。
+review 優先序 Codex（預設，GPT-6 Astra medium）→ GLM（完整 GLM-5.3 Max）→ Grok（已停訂，到期前可用），三者都可用 `--engine` 手動指定；預設由 Grok 改成 Codex 之前建立的 review，重送同一個 key 時要帶原本的 `--engine grok`，否則是不同請求（`idempotency_conflict`），要重審就換新 key；`run --engine glm` 仍是 Flash 工人。`doctor` 依已安裝 skill 列路由，舊 skill 沒有 Codex／GLM review helper 時只列有的；指定前先確認已安裝對應 helper。
 
 規格／施工／驗收按職責分段；不能自動開正常 session 時在本 session 續辦。Paseo 接力依 manager 的 `docs/handoff.md`：先建只讀確認 session，再原生 detach 成同 workspace 的獨立 session，核對設定、交接確認與 UI 列表／開啟／刷新，才移交與派下一步。Relay 本身仍不開 session。
 `recover` 明確接受繼承半成品；備份失敗時不能重派。所有模型 CLI 的憑證仍由原 helper 載入。

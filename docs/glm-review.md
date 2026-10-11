@@ -1,6 +1,6 @@
 # GLM-5.3 Max 唯讀審查
 
-審查第三順位（Grok、Codex 之後，見 SKILL 第五節），也可直接指定：用完整 **GLM-5.3**、ZCode 最高思考 **max**；備援工人仍是 GLM-5.3-Flash。GLM 工人交 GLM 審查時註明同系審查。
+審查第二順位（Codex 之後，見 SKILL 第五節），也可直接指定：用完整 **GLM-5.3**、ZCode 最高思考 **max**；備援工人仍是 GLM-5.3-Flash。GLM 工人交 GLM 審查時註明同系審查。
 
 ```bash
 bash ~/.agents/skills/osslab-manager/scripts/zcode-readonly-review.sh <workdir> <review-prompt-file>
@@ -8,7 +8,7 @@ bash ~/.agents/skills/osslab-manager/scripts/zcode-readonly-review.sh <workdir> 
 osrelay review <task> --owner <owner> --key <新審查鍵> --engine glm --prompt <review-prompt-file>
 ```
 
-兩個位置參數與 Grok helper 相同，完整報告印 stdout、pid／啟動資訊印 stderr。照 SKILL.md 的受管等待與證據保存方式執行；退出非零不可當有效審查，非空報告也不代表沒有 findings。
+兩個位置參數與其他審查 helper 相同，完整報告印 stdout、pid／啟動資訊印 stderr。照 SKILL.md 的受管等待與證據保存方式執行；退出非零不可當有效審查，非空報告也不代表沒有 findings。
 
 helper 從既有 `~/.openclaw/secrets/glm-coding-plan.env` 讀憑證，只把 key 放在乾淨的子程序環境；使用 Coding Plan 的 Anthropic 相容入口。`ZCODE_CLI_BIN` 可指定本機 CLI。不要把 key 放工單、prompt、argv 或 log；不修改使用者的 HOME 或全域設定。凍結副本須含整份 skill，尤其 `scripts/zcode-review.py`。
 

@@ -154,7 +154,7 @@ class RelayTest(unittest.TestCase):
         self.success_worker()
         self.completed(self.enqueue('verify', key='v')['id'])
         default = self.enqueue('review', key='default')
-        self.assertEqual(default['route']['engine'], 'grok')
+        self.assertEqual(default['route']['engine'], 'codex')
         self.completed(default['id'])
         review = self.enqueue('review', key='glm', engine='glm')
         self.assertEqual(review['route']['engine'], 'glm')
@@ -178,6 +178,10 @@ class RelayTest(unittest.TestCase):
         # A changed engine is a changed request, even under the same key.
         self.enqueue('review', key='codex', engine='glm', error='idempotency_conflict')
         self.assertEqual(self.completed(review['id'])['status'], 'succeeded')
+        # Grok stays available by hand after codex and glm.
+        grok = self.enqueue('review', key='grok', engine='grok')
+        self.assertEqual((grok['route']['engine'], grok['route']['model']), ('grok', 'fixture/grok'))
+        self.assertEqual(self.completed(grok['id'])['status'], 'succeeded')
         from osrelay.artifacts import RelayError, route
         self.assertEqual(route(self.skill, 'codex')['kind'], 'review')
         # Codex only reviews here; Codex as manager is a task runtime, not a worker engine.
@@ -991,6 +995,33 @@ sys.stdin.read()
         other = self.wait_raw(theirs['id'], '--timeout', '5')
         self.assertEqual(other.returncode, 5, other.stderr)
         self.assertEqual([q['qid'] for q in json.loads(other.stderr)['error']['details']['questions']], ['call_c'])
+
+    def test_wait_already_running_reports_a_new_question_another_wait_picked_up(self):
+        # A Claude manager blocked in one foreground wait cannot read a background wait's exit 5;
+        # the foreground wait must still report questions asked after it began.
+        import sqlite3
+        self.write_ticket(gate=str(self.base / 'gate'))
+        self.create()
+        quiet = self.enqueue()
+        self.runner()
+        self.eventually(lambda: self.call('status', 't1')['attempts'][0]['status'] == 'running')
+        with sqlite3.connect(self.state / 'relay.sqlite3') as db:
+            # Stand-in for a background wait that reports every question the instant it is asked.
+            db.execute("CREATE TRIGGER background_wait AFTER INSERT ON questions BEGIN "
+                       "UPDATE questions SET notified=NEW.asked WHERE attempt_id=NEW.attempt_id AND qid=NEW.qid; END")
+        blocked = subprocess.Popen([*CLI, '--state', str(self.state), 'wait', quiet['id'], '--timeout', '15'],
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env)
+        time.sleep(1)
+        ask = {'qid': 'call_late', 'timeout_ms': 6000, 'payload': self.QUESTION, 'result': str(self.base / 'late.json')}
+        late = self.extra_task('late', 'manager', ask=ask)
+        out, err = blocked.communicate(timeout=20)
+        self.assertEqual(blocked.returncode, 5, err)
+        items = json.loads(err)['error']['details']['questions']
+        self.assertEqual([(q['attempt'], q['qid']) for q in items], [(late['id'], 'call_late')])
+        self.assertIn('another wait may have reported it too', json.loads(err)['error']['message'])
+        self.assertIsNotNone(items[0]['notified'])
+        # A wait that starts after the question does not report it again.
+        self.assertEqual(self.wait_raw(quiet['id'], '--timeout', '0.5').returncode, 3)
 
     def test_unanswered_question_expires_and_answer_is_refused(self):
         result = self.base / 'ask.json'
