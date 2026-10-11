@@ -34,7 +34,7 @@ notes: >-
 
 路由已由本安裝定好，不重新摸工人、不另寫 `workers.md`。helper 不用本機自架模型 provider；憑證只從既有 secret 檔載入（`glm-5.3-flash.env`、`openrouter.env`、`glm-coding-plan.env`），不進 argv／log／git。要換模型或工具先問人，再改本 skill 開 PR。
 
-**選工人**：預設 DeepSeek，供應商是 RunInfra（2026-10-04 對照：同一模型的工具第一跳與長輸出都比當時的 OpenRouter 快；OpenRouter 腳本保留）。遇到下列情況先改派 OpenRouter 的同一支 DeepSeek（`pi-openrouter-worker.sh`），再不行才改派 GLM 備援，並在 `claimed-by` 寫實際引擎：RunInfra 暫停、503、啟動失敗、API 錯誤、額度或速率限制；同一張單 DeepSeek 驗收不過且原因像是模型能力；使用者指定。
+**選工人**：預設 DeepSeek，供應商是 RunInfra（2026-10-04 單輪對照：同一模型的工具第一跳與當時的 OpenRouter 相近或略快、長輸出約快 4～5 倍；OpenRouter 腳本保留）。RunInfra 是針對 agent 工作負載優化的託管服務（同一 session 的呼叫送到已有快取的副本），速度與費用結論只對它成立。2026-10-11 對 Claude Haiku 5.5 的實測見 [docs/benchmarks/2026-10-11-deepseek-vs-haiku.md](docs/benchmarks/2026-10-11-deepseek-vs-haiku.md)。遇到下列情況先改派 OpenRouter 的同一支 DeepSeek（`pi-openrouter-worker.sh`），再不行才改派 GLM 備援，並在 `claimed-by` 寫實際引擎：RunInfra 暫停、503、啟動失敗、API 錯誤、額度或速率限制；同一張單 DeepSeek 驗收不過且原因像是模型能力；使用者指定。
 Claude Haiku 只在使用者指定時派（`claude-haiku-worker.sh`），不插入上面的自動改派。它吃本機 Claude Pro 額度，和 Claude 經理共用同一個訂閱窗口。經理為 Claude 時，核實段註明同系施工；審查仍預設 Grok。`osrelay` 的引擎只有 pi／glm／grok，已有 Relay 任務的 worktree 不要改用這支手動派。
 程式碼與工單內容會送到該工人的模型供應商（RunInfra／DeepSeek，退路是 OpenRouter／DeepSeek，備援是 BigModel，指定的 Haiku 是 Anthropic 訂閱），工單照舊不寫秘密。
 

@@ -15,13 +15,15 @@
 | 角色 | 支援 | 備註 |
 |---|---|---|
 | 技術長（經理） | **Claude Code**、**Codex** | 只支援這兩種。Claude 用 Opus 5.5 以上、思考 high 以上；Codex 用 GPT-6 Astra、固定 **medium**（實測每步比 xhigh 快約 3 倍） |
-| junior（預設） | pi CLI 無頭＋**DeepSeek v4.1 Flash**，走 RunInfra（按量計費） | `scripts/pi-runinfra-worker.sh` |
+| junior（預設） | pi CLI 無頭＋**DeepSeek v4.1 Flash**，走 **RunInfra**（按量計費；不是 OpenRouter，也不是 DeepSeek 官方 API，見下方說明） | `scripts/pi-runinfra-worker.sh` |
 | junior（同模型退路） | 同上，改走 OpenRouter | RunInfra 暫停、額度或速率限制時用 `scripts/pi-openrouter-worker.sh` |
 | junior（備援） | ZCode CLI＋GLM-5.3-Flash（BigModel Coding Plan） | DeepSeek 驗收不過且像是模型能力時；`scripts/zcode-cloud-worker.sh` |
 | junior（指定才派） | Claude Code 無頭＋claude-haiku-5-5（本機訂閱） | 只手動派工，不進 Relay；`scripts/claude-haiku-worker.sh` |
 | 外部審查 | **Grok 4.7** medium（預設）；可指定 **GLM-5.3** High | 唯讀 Read／Grep；`scripts/grok-readonly-review.sh`、`scripts/zcode-readonly-review.sh` |
 
 Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Claude Code、Codex 上驗過。
+
+> **DeepSeek 的來源很關鍵**：我們用的是 [RunInfra](https://runinfra.ai) 的 `deepseek-v4-1-flash` 端點。RunInfra 是針對 agent 工作負載優化的託管服務，同一個 session 的重複呼叫會送到已有快取的副本（官方宣稱快取命中 92～99% 以上）。2026-10-04 單輪對照，同一顆模型的工具第一跳與 OpenRouter 相近或略快、長輸出約快 4～5 倍，所以改為預設，OpenRouter 保留為退路。本 README 的速度與費用數字都來自 RunInfra，換成 OpenRouter 或 DeepSeek 官方 API 要重新量。
 
 ## 怎麼運作
 
@@ -70,6 +72,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 - **施工中問答**：真機冒煙時 junior 以「契約衝突」發問、附證據與三個選項，技術長回答後 15 秒內收到並完成，回執逐題記下問答。
 - **正確性比單開發精準**：每張票都要過「驗收命令重跑＋異族審查＋逐條核實」三層檢查；同一個模型寫完自己看，盲點一模一樣。
 - **代價只有時間**：一張中型票從派單到三輪審查結束約 1.5 小時，急件不適合。
+- **工人對照（2026-10-11）**：DeepSeek（RunInfra）對 Claude Haiku 5.5，三張真實工單、三輪：DeepSeek 9/9 成功、快 1.5～1.7 倍；Haiku 走 Pro 訂閱每張單約用掉 5 小時額度 1～2%。完整報告：[docs/benchmarks/2026-10-11-deepseek-vs-haiku.md](docs/benchmarks/2026-10-11-deepseek-vs-haiku.md)。
 
 ### 案例：browser-workflow（瀏覽器租用與人工接手）
 

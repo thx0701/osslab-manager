@@ -13,13 +13,15 @@ This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the 
 | Role | Supported | Notes |
 |---|---|---|
 | Tech lead (manager) | **Claude Code**, **Codex** | Only these two. Claude: Opus 5.5 or later, thinking high or above. Codex: GPT-6 Astra at a fixed **medium** (measured about 3× faster per step than xhigh) |
-| Junior (default) | headless pi CLI + **DeepSeek v4.1 Flash** via RunInfra (pay per token) | `scripts/pi-runinfra-worker.sh` |
+| Junior (default) | headless pi CLI + **DeepSeek v4.1 Flash** via **RunInfra** (pay per token; not OpenRouter and not DeepSeek's own API — see the note below) | `scripts/pi-runinfra-worker.sh` |
 | Junior (same model, fallback provider) | Same, via OpenRouter | When RunInfra is paused or rate/quota limited: `scripts/pi-openrouter-worker.sh` |
 | Junior (backup) | ZCode CLI + GLM-5.3-Flash (BigModel Coding Plan) | When DeepSeek fails acceptance for what looks like model capability: `scripts/zcode-cloud-worker.sh` |
 | Junior (only when asked) | headless Claude Code + claude-haiku-5-5 (local subscription) | Manual dispatch only, not routed by Relay: `scripts/claude-haiku-worker.sh` |
 | External review | **Grok 4.7** medium (default); **GLM-5.3** High on request | Read-only Read/Grep: `scripts/grok-readonly-review.sh`, `scripts/zcode-readonly-review.sh` |
 
 Cursor and ZCode do not act as tech lead: waiting, handoff and mid-task questions are verified only on Claude Code and Codex.
+
+> **The DeepSeek provider matters**: we use [RunInfra](https://runinfra.ai)'s `deepseek-v4-1-flash` endpoint. RunInfra is hosting optimized for agent workloads: repeat calls from the same session go to the replica that already holds the cache (it claims 92–99%+ cache hits). In a single-round comparison on 2026-10-04 with the same model, it matched or slightly beat OpenRouter on time to the first tool call and was about 4–5× faster on long outputs, so it became the default; OpenRouter is kept as the fallback. Every speed and cost figure in this README comes from RunInfra — measure again before relying on them with OpenRouter or DeepSeek's own API.
 
 ## How it works
 
@@ -66,6 +68,7 @@ Open business rules (money, permissions, penalties…) come back to you one at a
 - **Mid-task questions**: in a live smoke test the junior asked a contract-conflict question with evidence and three options; after the lead answered, it received the answer within 15 seconds, finished, and recorded the exchange in its receipt.
 - **More accurate than solo development**: every ticket passes three independent checks — re-run acceptance, out-of-family review, finding-by-finding verification. A model reviewing its own work shares its own blind spots.
 - **The only cost is time**: a mid-sized ticket takes about 1.5 hours from dispatch to the end of three review rounds; not for emergencies.
+- **Worker benchmark (2026-10-11)**: DeepSeek on RunInfra vs Claude Haiku 5.5 on three real tickets, three rounds: DeepSeek succeeded 9/9 and was 1.5–1.7× faster; Haiku on a Pro subscription used about 1–2% of the 5-hour window per ticket. Full report: [docs/benchmarks/2026-10-11-deepseek-vs-haiku.en.md](docs/benchmarks/2026-10-11-deepseek-vs-haiku.en.md).
 
 ### Case: browser-workflow (browser leasing with human takeover)
 
