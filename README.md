@@ -120,6 +120,7 @@ Relay 需要 Linux、Python 3.11+ 與 Git，只用標準函式庫；runner 建�
 ## 路線圖
 
 - 支援其他時區（目前寫死台灣時間 UTC+8）。
+- 補測三種做法的總時間與總費用：Opus 經理＋DeepSeek、Opus 經理＋Haiku、Opus 5.5 自己寫（見[工人實測](docs/benchmarks/2026-10-11-deepseek-vs-haiku.md)）。
 
 ## License
 

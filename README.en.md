@@ -118,6 +118,7 @@ Relay needs Linux, Python 3.11+ and Git, standard library only; run the runner a
 ## Roadmap
 
 - Configurable time zone (currently fixed to UTC+8).
+- Measure total time and cost for three setups: Opus lead + DeepSeek, Opus lead + Haiku, and Opus 5.5 writing the code itself (see the [worker benchmark](docs/benchmarks/2026-10-11-deepseek-vs-haiku.en.md)).
 
 ## License
 

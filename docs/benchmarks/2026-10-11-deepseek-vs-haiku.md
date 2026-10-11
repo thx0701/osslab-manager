@@ -6,16 +6,10 @@
 
 - **預設工人維持 DeepSeek v4.1 Flash（RunInfra）**：三張真實工單、三輪，9 次全部成功；速度是 Haiku 的 1.5～1.7 倍，按官方 API 價格換算多數情況也比較便宜。
 - **Claude Haiku 5.5 只在指定時派**：走 Claude Pro 訂閱時每張單只用掉 5 小時額度約 1～2%，比讓 Opus 5.5 自己寫省很多；但比 DeepSeek 慢、耗時波動大，而且跟 Claude 經理共用同一個訂閱額度。
-- 測試中找到的 Haiku helper 啟動誤判已修正上線（見「發現的問題」）。
 
-## DeepSeek 的來源：RunInfra，不是 OpenRouter，也不是 DeepSeek 官方 API
+## DeepSeek 的來源
 
-本報告的 DeepSeek 數字**全部來自 RunInfra**（[runinfra.ai](https://runinfra.ai)）的 `deepseek-v4-1-flash` 端點。換供應商，速度與費用結論不一定成立。
-
-- **它是什麼**：官網描述為「針對 agent 工作負載優化的模型託管 API」，主打 session-aware routing——同一個 agent session 的重複呼叫，會送到手上已有快取的副本，官方宣稱快取命中率 92～99% 以上、DeepSeek V4.1 Flash 輸出約 378 token／秒（2026-10-11 官網）。
-- **我們為什麼選它**：2026-10-04 單輪對照，同一顆 `deepseek-v4-1-flash`，RunInfra 的工具第一跳與 OpenRouter 相近或略快，**長輸出約快 4～5 倍**，因此改為預設工人；OpenRouter 保留為退路（`scripts/pi-openrouter-worker.sh`）。
-- **實測看得到快取效果**：t5a 第 1 輪 DeepSeek 的輸入共約 385 萬 token，其中約 96% 是快取讀取。
-- **價格**：費用以 RunInfra 牌價計算——輸入 $0.14、快取讀取 $0.03、輸出 $0.58（每百萬 token，`scripts/runinfra-agent/models.json`）。官網 2026-10-11 標示 75 折，實際帳單會更低。
+本報告的 DeepSeek 跑在 [RunInfra](https://runinfra.ai)：針對 agent 工作負載優化的託管服務，同一 session 的呼叫會命中快取（本次 DeepSeek 九輪的輸入有 92～97% 來自快取）。我們先前測過同一顆模型，RunInfra 的長輸出約比 OpenRouter 快 4～5 倍。換成 OpenRouter 或 DeepSeek 官方 API，速度與費用結論要重新量。費用以 RunInfra 牌價計算：輸入 $0.14、快取讀取 $0.03、輸出 $0.58（每百萬 token）。
 
 ## 測試方法
 
@@ -28,15 +22,11 @@
 
 ### 可靠性
 
-| 工人 | 成功 |
-|---|---|
-| DeepSeek（RunInfra） | 9／9 |
-| Haiku（修正前） | 4／7（3 次被 helper 誤判秒退） |
-| Haiku（修正後） | 3／3，另以真 Claude CLI 直接呼叫 4／4 |
+兩邊實際施工的輪次全部成功、驗收命令全過：DeepSeek 9 次，Haiku 7 次。
 
-### 速度（只算成功的輪次）
+### 速度
 
-| 工單 | DeepSeek 三輪 | Haiku 成功的輪次 | 中位數倍數 |
+| 工單 | DeepSeek 三輪 | Haiku 各輪 | 中位數倍數 |
 |---|---|---|---|
 | t5a（Python） | 286／341／317 秒 | 488／420／1,475 秒 | Haiku 慢 1.5 倍 |
 | t4d（Python） | 100／147／113 秒 | 183／205 秒 | Haiku 慢 1.7 倍 |
@@ -53,8 +43,18 @@ DeepSeek 自己三輪之間也有 20～45% 的波動。Haiku t5a 第 3 輪的 1,
 | t1 | 0.11～0.17 | 0.32～0.35 | 3.3 |
 
 - Haiku 中大型單約貴 2.5 倍：輸出約是 DeepSeek 的兩倍，其中約 2/3 是思考 token；context 一長，單次 prompt 超過 10 萬 token 就換成較高單價（t5a 第 1 輪 47 次呼叫有 25 次）。
-- Haiku 實際走 Pro 訂閱，不按 token 付費；上表是「如果改走 API」的換算。
+- Haiku 實際走 Pro 訂閱，不按 token 付費；上表是「如果改走 API」的換算，用 token 數乘官方價格。
 - 「換成 Opus 5.5 價格」只是同樣 token 的粗略參考，Opus 自己寫時回合數與行為都會不同，不是實測值。
+
+### 三種做法總計（三張單，待補測）
+
+| 做法 | 三張單時間加總 | 三張單費用（美元） |
+|---|---|---|
+| A. Opus 經理＋DeepSeek 工人 | 工人 10.5～13.3 分鐘（三輪） | 工人 0.30～0.36（RunInfra 牌價） |
+| B. Opus 經理＋Haiku 工人 | 工人 18.1～35.0 分鐘（第 1、3 輪） | 工人換算 API 價 0.75～0.77；實際走 Pro 訂閱 |
+| C. Opus 5.5 自己寫 | 未測 | 未測 |
+
+這張表還不完整：A、B 只算工人，經理（Opus）寫工單、等待、驗收的時間與 token 本次沒有量；C 沒有實測。**之後會補測**：同樣三張單，A、B 加上經理的時間與費用，C 由 Opus 5.5 無頭直接施工，三種做法並列總時間、總費用與訂閱額度。
 
 ### 訂閱額度（Haiku）
 
@@ -62,19 +62,13 @@ DeepSeek 自己三輪之間也有 20～45% 的波動。Haiku t5a 第 3 輪的 1,
 
 ### 品質
 
-所有成功輪次的驗收命令都通過。**但這不足以比較品質**：t1 的驗收命令在起點版本就會通過；拿當時驗收過的最終測試當標準答案的檢查沒有跑完。本報告不判定哪一邊做得比較好。
-
-## 發現的問題與修正
-
-- **Haiku helper 啟動誤判（已修，osslab-manager PR #627）**：Claude Code 2.1.286 有時在 `system/init` 前先送 `system/ui_invalidate`，`scripts/claude-haiku-run.py` 原本只看第一行，於是把正常啟動判成 `model=missing` 秒退。現在 `init` 前最多暫存 20 個 system 事件，`init` 通過模型與認證檢查後依序寫出；`init` 前出現其他事件、非 JSON 或超過上限仍拒絕。失敗時的訂閱額度是 2～74%、狀態都是 allowed，與額度無關。
-- **Claude CLI 回報的 Haiku 費用不可用**：CLI 2.1.286 不認得 `claude-haiku-5-5`（`unrecognized_model`、`costBasis: unknown`），`total_cost_usd` 是用 Opus 5.5 價格算的，比 Haiku 實際價格高約 10～35 倍。費用要用 token 數乘官方價格。
-- **本次對照腳本的計時錯誤（已修正）**：前兩輪先等 DeepSeek 結束才收 Haiku，先結束的一方會被記成對方的耗時；只影響 3 次失敗的 Haiku 輪次（實際都在 2 秒內退出），成功輪次的耗時與 Claude 自己回報的 `duration_ms` 相差不到 2 秒。
+所有輪次的驗收命令都通過。**但這不足以比較品質**：t1 的驗收命令在起點版本就會通過；拿當時驗收過的最終測試當標準答案的檢查沒有跑完。本報告不判定哪一邊做得比較好。
 
 ## 限制
 
 - 樣本小：三張工單、三輪；工單偏中小型（DeepSeek 2～6 分鐘）。
 - 品質未比較（見上）。
-- 沒有實測「Opus 5.5 自己寫」的成本與耗時。
+- 沒有實測「Opus 5.5 自己寫」的成本與耗時，也沒有算經理的花費；之後補測（見「三種做法總計」）。
 - Haiku 的額度使用率會受同帳號其他 session 影響。
 - DeepSeek 只測 RunInfra；OpenRouter 與 DeepSeek 官方 API 未在本次測試。
 
