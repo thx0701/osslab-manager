@@ -114,6 +114,10 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 
 Relay 需要 Linux、Python 3.11+ 與 Git，只用標準函式庫；runner 建議用 systemd user service 常駐。SKILL.md 提到的 `develop → implement → verify-change → code-review`、`to-tickets` 是我們內部的配套 skill 鏈，外部使用者可換成自己的開發流程。金鑰路徑與模型路由改 `scripts/` 開頭幾行即可。
 
+## 路線圖
+
+- 支援其他時區（目前寫死台灣時間 UTC+8）。
+
 ## License
 
 MIT，見 [LICENSE](LICENSE)。改編自 [yanauto/opus-manager](https://github.com/yanauto/opus-manager)（MIT）。

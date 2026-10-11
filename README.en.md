@@ -104,11 +104,17 @@ Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does 
 - Lead hotfix: verified non-blocking nits may be fixed directly; blocking findings still go to a junior
 - Dead-ticket recovery: PID-reuse checks, partial changes backed up first, re-dispatch recorded on the same ticket
 - Three-stage sessions with 2KB handoffs
-- Team timestamps in Taiwan time (+0800)
+- All timestamps in Taiwan time (UTC+8), our team's rule — see Environment if you are in another time zone
 
 ## Environment
 
 Relay needs Linux, Python 3.11+ and Git, standard library only; run the runner as a systemd user service. The `develop → implement → verify-change → code-review` and `to-tickets` chain mentioned in SKILL.md is our internal companion skill set; substitute your own development flow. Change key paths and model routing at the top of `scripts/`.
+
+**Time zone**: every timestamp is hardcoded to Taiwan time (UTC+8), our team's rule. Helper start lines, Relay records, evidence files and receipts carry the `+08:00` offset, so the instants are correct; the live-progress lines in worker logs show only `HH:MM:SS` without an offset. If you are not in UTC+8, change these yourself for now: `TZ=Asia/Taipei` in `scripts/*.sh`, `timedelta(hours=8)` in `scripts/pi-worker-driver.py` and `scripts/evidence-run.sh`, `Asia/Taipei` in `scripts/zcode-review.py`, `now()` in `relay/osrelay/artifacts.py`, and the completion-time instruction in `templates/worker-prompt.md` and `templates/receipt.md`.
+
+## Roadmap
+
+- Configurable time zone (currently fixed to UTC+8).
 
 ## License
 
