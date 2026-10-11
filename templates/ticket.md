@@ -7,7 +7,7 @@
 > git-worktree: <這條鏈的 git worktree 路徑。可同時派的鏈各用一棵>
 > claimed-by: （派出後由經理照 worker.log 起跑行的 engine= @ at= 填寫）
 > review-tier: <高階｜低階；派單時預估，驗收時照實際 diff 重定，只升不降>
-> review-engine: <grok（預設）｜glm（明確指定完整 GLM-5.3 High）；同系審查註明>
+> review-engine: <grok（第一順位）｜codex（GPT-6 Astra medium）｜glm（GLM-5.3 max）；換順位寫原因，同系審查註明>
 > relay-mother-task: <阻擋修復票填母 task id，施工映射母 task 的新 attempt；其他票刪掉此行>
 > 重派：<無；有就寫次數、時間與原因>
 

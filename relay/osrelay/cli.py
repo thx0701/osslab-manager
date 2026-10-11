@@ -115,8 +115,9 @@ def parser():
                             help="Continue this task's latest pi session; refused when it cannot be continued")
         if action == 'review':
             sp.add_argument('--prompt', required=True)
-            sp.add_argument('--engine', choices=('grok', 'glm'), default='grok',
-                            help='Review engine; GLM uses the full GLM-5.3 Max read-only helper')
+            sp.add_argument('--engine', choices=('grok', 'codex', 'glm'), default='grok',
+                            help='Review engine in priority order: grok, then codex, then glm; '
+                                 'model and effort come from the skill helper')
         if action == 'block':
             sp.add_argument('--reason', required=True)
             sp.add_argument('--resume-note', required=True)
@@ -159,9 +160,10 @@ def execute(store, args, command):
             runner = {'alive': False}
         skill = DEFAULT_SKILL.resolve()
         routes = [route(skill, engine) for engine in ('pi', 'glm', 'grok')]
-        # Older installed skills still support the default routes; GLM review is optional.
-        if (skill / 'scripts/zcode-readonly-review.sh').is_file():
-            routes.append(route(skill, 'glm', 'review'))
+        # Older installed skills still support the default routes; Codex and GLM review are optional.
+        for engine, helper in (('codex', 'codex-readonly-review.sh'), ('glm', 'zcode-readonly-review.sh')):
+            if (skill / 'scripts' / helper).is_file():
+                routes.append(route(skill, engine, 'review'))
         return {'state': str(store.root), 'runner': runner, 'skill': str(skill), 'routes': routes}
     if action == 'serve':
         from .runner import serve

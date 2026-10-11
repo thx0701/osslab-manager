@@ -19,7 +19,7 @@
 | junior（同模型退路） | 同上，改走 OpenRouter | RunInfra 暫停、額度或速率限制時用 `scripts/pi-openrouter-worker.sh` |
 | junior（備援） | ZCode CLI＋GLM-5.3-Flash（BigModel Coding Plan） | DeepSeek 驗收不過且像是模型能力時；`scripts/zcode-cloud-worker.sh` |
 | junior（指定才派） | Claude Code 無頭＋claude-haiku-5-5（本機訂閱） | 只手動派工，不進 Relay；`scripts/claude-haiku-worker.sh` |
-| 外部審查 | **Grok 4.7** medium（預設）；可指定 **GLM-5.3** High | 唯讀 Read／Grep；`scripts/grok-readonly-review.sh`、`scripts/zcode-readonly-review.sh` |
+| 外部審查 | 依序 **Grok 4.7** medium → **Codex** GPT-6 Astra medium → **GLM-5.3** max，都可指定 | 唯讀：Grok、GLM 只給 Read／Grep，Codex 走唯讀沙箱；`scripts/grok-readonly-review.sh`、`scripts/codex-readonly-review.sh`、`scripts/zcode-readonly-review.sh` |
 
 Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Claude Code、Codex 上驗過。
 
@@ -52,7 +52,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
    - `~/.openclaw/secrets/glm-5.3-flash.env`：`GLM_53_FLASH_API_KEY=...`（RunInfra，預設 junior）
    - `~/.openclaw/secrets/openrouter.env`：`OPENROUTER_API_KEY=...`（OpenRouter 退路）
    - `~/.openclaw/secrets/glm-coding-plan.env`：`ZHIPU_API_KEY=...`（GLM 備援與 GLM 審查）
-3. 本機需要 `pi`（0.99 以上，RPC 模式）、`python3`；審查用 `grok`；GLM 備援與審查用 `zcode`（路徑可用 `ZCODE_CLI_BIN` 覆蓋）。
+3. 本機需要 `pi`（0.99 以上，RPC 模式）、`python3`；審查用 `grok`、`codex`（ChatGPT 登入）；GLM 備援與審查用 `zcode`（路徑可用 `ZCODE_CLI_BIN` 覆蓋）。
 4. 安裝 Relay：`cd relay && python3 deploy/install-user.py`，再照 [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md) 啟用 `osrelay.service`。施工中問答只在 Relay 派工時有；沒裝 Relay 時技術長照 `docs/manual-dispatch.md` 手動派工，junior 發問會立刻得到「沒有經理通道」。
 5. 在 Claude Code 或 Codex 對話裡說「托管」「走工單」「派出去」，丟出帶三要素的 goal。
 
@@ -103,7 +103,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 
 ## 與 upstream（yanauto/opus-manager）的差異
 
-- 工人路由預先定好：DeepSeek（RunInfra）預設、OpenRouter 退路、GLM 備援、Grok 唯讀審查；Claude Haiku 只在指定時手動派工
+- 工人路由預先定好：DeepSeek（RunInfra）預設、OpenRouter 退路、GLM 備援、唯讀審查依序 Grok → Codex → GLM；Claude Haiku 只在指定時手動派工
 - Relay 帳本：派工、等待、恢復、交接、驗收與提交核對都有程式化的證據指紋
 - 即時進度與施工中問答（pi RPC 驅動程式＋`ask_manager` 擴充）
 - 先量再問：盤點產出缺口表，人選範圍；拆單「人管範圍、技術長管粒度」

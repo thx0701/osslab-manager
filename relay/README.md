@@ -35,13 +35,15 @@ osrelay context ticket-001 --runtime codex
 
 每次 attempt 複製整份 skill，記錄 helper hash、工單、route、程序身份、stdout/stderr 與結果。
 工人預設 pi／DeepSeek v4.1 Flash high；經理可明確指定 `--engine glm` 使用 skill 的 GLM-5.3-Flash。
-日常 `review` 仍由 Grok 4.7 medium 執行；明確 `review --engine glm` 使用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，與 GLM-5.3-Flash 工人分開路由。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。
+`review` 依優先序：預設 Grok 4.7 medium；`--engine codex` 用 Codex 唯讀沙箱跑 GPT-6 Astra medium；`--engine glm` 用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，與 GLM-5.3-Flash 工人分開路由。三者都可手動指定；Grok 不能用時由經理改派下一順位。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。`--engine codex` 是審查員，和任務的 `--runtime codex`（Codex 當經理）無關。
 本專案交付的外部審查另由使用者指定 GLM-5.3。
 
 ```sh
 osrelay verify ticket-001 --owner project-manager --key verification-1 -- make test
 osrelay review ticket-001 --owner project-manager --key review-1 --prompt /path/to/review-prompt.md
-# 使用者指定完整 GLM-5.3 Max 審查時
+# Grok 不能用或指定 Codex 審查時
+osrelay review ticket-001 --owner project-manager --key review-codex-1 --engine codex --prompt /path/to/review-prompt.md
+# 再下一順位，或指定完整 GLM-5.3 Max 審查時
 osrelay review ticket-001 --owner project-manager --key review-glm-1 --engine glm --prompt /path/to/review-prompt.md
 # 等待各 attempt 結束、逐條閱讀並核實證據後
 osrelay accept ticket-001 --owner project-manager --note '已核實驗證與審查，逐項符合工單'

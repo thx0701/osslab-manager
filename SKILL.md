@@ -4,7 +4,8 @@ description: >-
   工單托管：經理（Claude Code／Codex）不寫實作，先盤點現況，再把開發拆成工單，
   預設派給 pi（本機執行、模型 DeepSeek v4.1 Flash 走 RunInfra）施工、ZCode（GLM-5.3-Flash，
   Coding Plan）為備援；使用者指定時可改派 Claude Code（claude-haiku-5-5，本機 Pro 訂閱，僅手動派工）。
-  預設 Grok Build（grok-4.7，medium）唯讀審查，可指定 ZCode GLM-5.3 High，經理負責驗收、
+  唯讀審查依序 Grok Build（grok-4.7，medium）→ Codex（gpt-6-astra，medium）→ ZCode GLM-5.3 max，
+  三者都可手動指定；經理負責驗收、
   逐條核實與逐張本機提交。
   觸發：走工單、托管、派出去、派給別的模型做、osslab-manager、manager skill、opus-manager（舊名）。
   平時照常自己動手，只在使用者要求時使用。
@@ -26,8 +27,9 @@ notes: >-
 | 施工（同一模型、舊供應商） | 同上，改走 OpenRouter。RunInfra 暫停、503 或額度失敗時改呼叫這支，參數相同 | `scripts/pi-openrouter-worker.sh [--resume <接續鍵>] <workdir> <ticket>` |
 | 施工（備援） | ZCode CLI 在本機以 yolo 模式執行；模型 `GLM-5.3-Flash` 走雲端（BigModel Coding Plan 訂閱，思考預設 Max） | `scripts/zcode-cloud-worker.sh [--resume <接續鍵>] <workdir> <ticket>`（不接續，一律從零） |
 | 施工（指定） | Claude Code 無頭；模型 `claude-haiku-5-5`、effort `high`，走本機 Pro 訂閱。不載入 skill。啟動事件的模型不符或改走 API key 就失敗 | `scripts/claude-haiku-worker.sh [--resume <接續鍵>] <workdir> <ticket>`（不接續，一律從零；Relay 不路由，見下方選工人） |
-| 審查（預設） | Grok Build，`grok-4.7`，reasoning effort `medium`，只給 Read／Grep | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
-| 審查（可指定） | ZCode，完整 `GLM-5.3`，思考 `High`，只給 Read／Grep | `scripts/zcode-readonly-review.sh <workdir> <prompt-file>`；見 [docs/glm-review.md](docs/glm-review.md) |
+| 審查（第一順位） | Grok Build，`grok-4.7`，reasoning effort `medium`，只給 Read／Grep | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
+| 審查（第二順位） | Codex 唯讀沙箱，`gpt-6-astra`，reasoning effort `medium`：shell 只能讀、不能寫、沒有網路，不載入本機 Codex 設定與 MCP，登入沿用本機 ChatGPT 帳號（和 Codex 經理共用額度） | `scripts/codex-readonly-review.sh <workdir> <prompt-file>` |
+| 審查（第三順位） | ZCode，完整 `GLM-5.3`，思考 `max`，只給 Read／Grep | `scripts/zcode-readonly-review.sh <workdir> <prompt-file>`；見 [docs/glm-review.md](docs/glm-review.md) |
 | 等待（工具） | 阻塞到 pid 結束，只印一行 | `scripts/wait-worker.sh <pid\|worker.log\|review.err> <max_seconds>` |
 | 收屍備份（工具） | 保存 binary patch 與未追蹤檔，核對後才准人工清理 | `scripts/backup-worktree.sh <workdir> <全新備份目錄>` |
 | 證據（工具） | 跑一條命令，完整輸出與 JSON 信封存檔，stdout 只印摘要 | `scripts/evidence-run.sh <out-dir> <label> -- <命令…>` |
@@ -35,7 +37,7 @@ notes: >-
 路由已由本安裝定好，不重新摸工人、不另寫 `workers.md`。helper 不用本機自架模型 provider；憑證只從既有 secret 檔載入（`glm-5.3-flash.env`、`openrouter.env`、`glm-coding-plan.env`），不進 argv／log／git。要換模型或工具先問人，再改本 skill 開 PR。
 
 **選工人**：預設 DeepSeek，供應商是 RunInfra（2026-10-04 單輪對照：同一模型的工具第一跳與當時的 OpenRouter 相近或略快、長輸出約快 4～5 倍；OpenRouter 腳本保留）。RunInfra 是針對 agent 工作負載優化的託管服務（同一 session 的呼叫送到已有快取的副本），速度與費用結論只對它成立。2026-10-11 對 Claude Haiku 5.5 的實測見 [docs/benchmarks/2026-10-11-deepseek-vs-haiku.md](docs/benchmarks/2026-10-11-deepseek-vs-haiku.md)。遇到下列情況先改派 OpenRouter 的同一支 DeepSeek（`pi-openrouter-worker.sh`），再不行才改派 GLM 備援，並在 `claimed-by` 寫實際引擎：RunInfra 暫停、503、啟動失敗、API 錯誤、額度或速率限制；同一張單 DeepSeek 驗收不過且原因像是模型能力；使用者指定。
-Claude Haiku 只在使用者指定時派（`claude-haiku-worker.sh`），不插入上面的自動改派。它吃本機 Claude Pro 額度，和 Claude 經理共用同一個訂閱窗口。經理為 Claude 時，核實段註明同系施工；審查仍預設 Grok。`osrelay` 的引擎只有 pi／glm／grok，已有 Relay 任務的 worktree 不要改用這支手動派。
+Claude Haiku 只在使用者指定時派（`claude-haiku-worker.sh`），不插入上面的自動改派。它吃本機 Claude Pro 額度，和 Claude 經理共用同一個訂閱窗口。經理為 Claude 時，核實段註明同系施工；審查照第五節的順位。`osrelay` 的施工引擎只有 pi／glm，已有 Relay 任務的 worktree 不要改用這支手動派。
 程式碼與工單內容會送到該工人的模型供應商（RunInfra／DeepSeek，退路是 OpenRouter／DeepSeek，備援是 BigModel，指定的 Haiku 是 Anthropic 訂閱），工單照舊不寫秘密。
 
 **工人隔離的邊界**：helper 以乾淨環境變數啟動工人，不繼承經理 session 已匯出的 token 與業務憑證；但工人仍在本機跑 shell，看得到 Docker、網路與磁碟上的檔案（含 secret 檔），「不動 prod」只靠指示。pi 工人另以精簡模式啟動：不載入全域與公司 skill（含通訊與業務系統的）、擴充與 prompt 範本，每一層的 AGENTS.md／CLAUDE.md 都不自動載入（上層共用規矩可能寫著怎麼載入團隊秘密）；repo 自己的 AGENTS.md／CLAUDE.md 改由 helper 指示與工單要求它用 read 去讀，實測會照讀照做。repo 自己的規矩若本身含上層共用段落，工人讀檔時仍會看到，這由指示「不讀取、不輸出秘密」擋。2026-09-27 實測每次請求的 prompt 從約 7.3k token 降到 1.6k，工具照舊 read／bash／edit／write。zcode 備援還沒有對應的精簡開關，照舊載入。指定的 Haiku 工人用私人設定目錄，裡面只有訂閱憑證副本，跑完刪掉；並以 `--safe-mode` 不載入 CLAUDE.md、skill、hooks 與 MCP。它不讀 API key。Claude Code 回報的啟動模型不是 `claude-haiku-5-5`、收工用量不是這個模型、或認證來源是 API key，helper 直接失敗，回執不算數。這版 CLI 可能在 stderr 印 `unrecognized_model`；以 helper 退出碼和用量為準，不拿那行單獨否決。同一原因，CLI 回報的 `total_cost_usd`／`costUSD` 是用 Opus 5.5 價格算的（2026-10-11 實測，`costBasis: unknown`），不能當 Haiku 費用，要算費用用 token 數乘官方價格。CLI 有時會在 `init` 前先送 `ui_invalidate` 之類的 system 事件，helper 會略過（最多 20 個），`init` 前出現其他事件仍拒絕。權限是 `bypassPermissions`（對齊 zcode 的 yolo），不 commit 仍靠工單指示。所以工單不寫秘密或 secret 路徑；凡要碰 prod 的驗證（唯讀煙霧、XML-RPC、瀏覽器）由經理在第四節自己做；給工人拋棄式測試環境，並寫明哪些共用資源不准刪。
@@ -44,7 +46,7 @@ OSSLab 開發順序照舊：`develop → implement → verify-change → code-re
 
 ## Relay 執行路徑（Codex／Claude Code 經理）
 
-已安裝 `osrelay` 的主機（Paseo 上或一般終端機皆可），Codex 或 Claude Code 當經理時，托管先讀 [docs/relay.md](docs/relay.md)，由 Relay 保管派工、等待、恢復與交接；本 skill 仍負責決策、驗收與提交。Relay 的施工與審查 helper 仍是 pi、glm、grok。Claude Haiku 不在這張引擎表裡。Relay 程式不喚醒、不開經理 session；自動開下一段只有 Paseo 的 `create_agent`（第九節、`docs/handoff.md`）。
+已安裝 `osrelay` 的主機（Paseo 上或一般終端機皆可），Codex 或 Claude Code 當經理時，托管先讀 [docs/relay.md](docs/relay.md)，由 Relay 保管派工、等待、恢復與交接；本 skill 仍負責決策、驗收與提交。Relay 的施工 helper 是 pi、glm，審查 helper 是 grok、codex、glm。Claude Haiku 不在這張引擎表裡。Relay 程式不喚醒、不開經理 session；自動開下一段只有 Paseo 的 `create_agent`（第九節、`docs/handoff.md`）。
 
 Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID 等待、收屍與換段程序改用該文件的 CLI 操作，不混用兩套派工。其餘工單品質、依賴、核實與權限規則照舊。未安裝 Relay 的 host 仍用下文原流程；已存在 Relay 任務而 runner 不可用時先恢復 runner，不另走 helper 重派。
 
@@ -136,9 +138,9 @@ Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID �
 
 最後一次實作變更後跑 `verify-change`。驗收過了還不提交，先走第五、六節審查，提交在第七節。
 
-## 五、唯讀外部審查（預設 Grok）
+## 五、唯讀外部審查（Grok → Codex → GLM）
 
-日常預設 Grok；使用者或已定工單指定 GLM 時，改用完整 GLM-5.3 High 的 helper，不自動 fallback。GLM-5.3-Flash 工人不變。工人與審查員同屬 GLM 時，在核實段註明「同系審查」，不稱異族。
+審查員依序：Grok（`grok-readonly-review.sh`）→ Codex GPT-6 Astra medium（`codex-readonly-review.sh`）→ GLM-5.3 max（`zcode-readonly-review.sh`）；使用者或已定工單指定哪個就用哪個。前一順位不能用才換下一個：helper 非零退出、啟動／認證／額度錯誤，或報告空白、缺標頭。換之前把失敗那輪的報告與 stderr 留在原 `$A`，核實段寫實際審查員與換人原因。報告內容不合意不是換人的理由，findings 照第六節核實。helper 自己不 fallback，換人由經理決定。審查員和經理或工人同一家（例如 Codex 經理配 Codex 審查、GLM 工人配 GLM 審查）時，在核實段註明「同系審查」，不稱異族。GLM-5.3-Flash 工人不變。
 
 **審查分級**：`review-tier` 寫在工單 header，派單時先預估。
 
@@ -163,7 +165,7 @@ rc=0; bash ~/.agents/skills/osslab-manager/scripts/grok-readonly-review.sh <work
 printf '\nhelper exit=%s\n' "$rc" >> "$E"; exit "$rc"
 ```
 
-指定 GLM 時，上面的 helper 換成 `zcode-readonly-review.sh`，等待與證據保存相同。GLM helper 會印「審查：zcode / GLM-5.3 high @ <時間>」。提示要求：Grok 報告第一行就是「審查：grok / grok-4.7 medium @ <時間>」，前面不加開場白；Standards、Spec、Verification 三軸分開；每條附 嚴重度｜`file:line`｜問題｜程式證據｜建議修法；沒把握標「存疑」，沒問題直說不湊數；不得改檔。告訴審查員：它是唯讀，檢查你提供的執行證據即可，自己沒重跑不算驗證失敗；但證據缺漏、過期或不足仍擋驗收，由經理補。審查員仍常在標頭前加一句開場白；內容齊全就在核實段落記一筆，不必重跑。
+換成 Codex 或 GLM 時，上面的 helper 換成 `codex-readonly-review.sh` 或 `zcode-readonly-review.sh`，等待與證據保存相同。這兩支 helper 自己在報告第一行加標頭（「審查：codex / gpt-6-astra medium @ <時間>」「審查：zcode / GLM-5.3 max @ <時間>」），提示不必再要求。提示要求：Grok 報告第一行就是「審查：grok / grok-4.7 medium @ <時間>」，前面不加開場白；Standards、Spec、Verification 三軸分開；每條附 嚴重度｜`file:line`｜問題｜程式證據｜建議修法；沒把握標「存疑」，沒問題直說不湊數；不得改檔。告訴審查員：它是唯讀，檢查你提供的執行證據即可，自己沒重跑不算驗證失敗；但證據缺漏、過期或不足仍擋驗收，由經理補。審查員仍常在標頭前加一句開場白；內容齊全就在核實段落記一筆，不必重跑。
 
 ## 六、逐條核實
 
@@ -200,7 +202,7 @@ printf '\nhelper exit=%s\n' "$rc" >> "$E"; exit "$rc"
 
 ## 八、收尾
 
-push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，看各張單之間的互相影響（例如後一張改了前一張依賴的東西）；token 不是問題時再加一輪 Grok，審查包換成整批 diff 與各單驗證證據。發現問題照第六、七節開修復單處理。
+push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，看各張單之間的互相影響（例如後一張改了前一張依賴的東西）；token 不是問題時再加一輪外部審查（照第五節順位），審查包換成整批 diff 與各單驗證證據。發現問題照第六、七節開修復單處理。
 
 閘門都過、repo 規則允許時才 push 分支並開 PR，PR 說明帶工單號；merge 與部署照 repo 流程並經人同意。清暫存前，把審查結論、各條處置、驗證命令與結果、剩餘限制保存在工單或 PR；秘密要遮，大型原始 log 留 Git 外（`~/.local/state/osslab-manager/`），唯一驗收證據不留在 `/tmp`。盤點建的臨時環境此時清掉；`pi-sessions/` 裡用不到的 session 目錄一併刪：`base-head` 與該 worktree 目前 HEAD 不同的全刪（helper 只接續 HEAD 未變的 session）；同一 worktree 只留仍可能被接續的那個（手動派工是原單號，Relay 是該 task 最新成功 pi 工人的 attempt id）。
 

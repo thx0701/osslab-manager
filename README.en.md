@@ -17,7 +17,7 @@ This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the 
 | Junior (same model, fallback provider) | Same, via OpenRouter | When RunInfra is paused or rate/quota limited: `scripts/pi-openrouter-worker.sh` |
 | Junior (backup) | ZCode CLI + GLM-5.3-Flash (BigModel Coding Plan) | When DeepSeek fails acceptance for what looks like model capability: `scripts/zcode-cloud-worker.sh` |
 | Junior (only when asked) | headless Claude Code + claude-haiku-5-5 (local subscription) | Manual dispatch only, not routed by Relay: `scripts/claude-haiku-worker.sh` |
-| External review | **Grok 4.7** medium (default); **GLM-5.3** High on request | Read-only Read/Grep: `scripts/grok-readonly-review.sh`, `scripts/zcode-readonly-review.sh` |
+| External review | In order: **Grok 4.7** medium → **Codex** GPT-6 Astra medium → **GLM-5.3** max; any can be requested | Read-only: Grok and GLM get Read/Grep only, Codex runs in its read-only sandbox; `scripts/grok-readonly-review.sh`, `scripts/codex-readonly-review.sh`, `scripts/zcode-readonly-review.sh` |
 
 Cursor and ZCode do not act as tech lead: waiting, handoff and mid-task questions are verified only on Claude Code and Codex.
 
@@ -50,7 +50,7 @@ New in this version:
    - `~/.openclaw/secrets/glm-5.3-flash.env`: `GLM_53_FLASH_API_KEY=...` (RunInfra, default junior)
    - `~/.openclaw/secrets/openrouter.env`: `OPENROUTER_API_KEY=...` (OpenRouter fallback)
    - `~/.openclaw/secrets/glm-coding-plan.env`: `ZHIPU_API_KEY=...` (GLM backup and GLM review)
-3. Install `pi` (0.99 or later, RPC mode) and `python3`; `grok` for review; `zcode` for the GLM backup and review (override its path with `ZCODE_CLI_BIN`).
+3. Install `pi` (0.99 or later, RPC mode) and `python3`; `grok` and `codex` (signed in with ChatGPT) for review; `zcode` for the GLM backup and review (override its path with `ZCODE_CLI_BIN`).
 4. Install Relay: `cd relay && python3 deploy/install-user.py`, then enable `osrelay.service` per [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md). Mid-task questions exist only under Relay; without it the lead dispatches by hand per `docs/manual-dispatch.md`, and a junior that asks gets "no manager channel" immediately.
 5. In Claude Code or Codex, say "托管" / "走工單" / "派出去" (or ask it to use osslab-manager) and give a goal with the three essentials.
 
@@ -99,7 +99,7 @@ Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does 
 
 ## Differences from upstream (yanauto/opus-manager)
 
-- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, Grok read-only review; Claude Haiku only by explicit manual dispatch
+- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, read-only review in the order Grok → Codex → GLM; Claude Haiku only by explicit manual dispatch
 - Relay ledger: dispatch, waiting, recovery, handoff, acceptance and commit checks with programmatic evidence fingerprints
 - Live progress and mid-task questions (pi RPC driver + `ask_manager` extension)
 - Measure first, then ask: inventory produces a gap table; humans own scope, the lead owns granularity

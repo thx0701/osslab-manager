@@ -73,7 +73,7 @@ accept 通過後 `state=accepted` 並保留 worktree 占用；經理依原 skill
 再 `osrelay finalize <task> --owner ... --commit <SHA> --note ...`，核對 SHA 是目前 HEAD、
 工作樹乾淨且提交 tree 等於 accept 時的預期 tree 後才收尾並釋放。Relay 不代 commit。
 review findings 若需修改，再 run 新 key、重驗重審。
-日常 review 預設 Grok；明確 `review --engine glm` 是完整 GLM-5.3 Max 唯讀審查，`run --engine glm` 仍是 Flash 工人。`doctor` 依已安裝 skill 列路由，舊 skill 沒有 GLM review helper 時保留原三條；指定 GLM 前先確認已安裝新 helper。
+review 優先序 Grok → Codex（GPT-6 Astra medium）→ GLM（完整 GLM-5.3 Max），三者都可用 `--engine` 手動指定；`run --engine glm` 仍是 Flash 工人。`doctor` 依已安裝 skill 列路由，舊 skill 沒有 Codex／GLM review helper 時只列有的；指定前先確認已安裝對應 helper。
 
 規格／施工／驗收按職責分段；不能自動開正常 session 時在本 session 續辦。Paseo 接力依 manager 的 `docs/handoff.md`：先建只讀確認 session，再原生 detach 成同 workspace 的獨立 session，核對設定、交接確認與 UI 列表／開啟／刷新，才移交與派下一步。Relay 本身仍不開 session。
 `recover` 明確接受繼承半成品；備份失敗時不能重派。所有模型 CLI 的憑證仍由原 helper 載入。

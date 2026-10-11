@@ -168,14 +168,39 @@ class RelayTest(unittest.TestCase):
         from osrelay.artifacts import route
         self.assertEqual(route(self.skill, 'glm')['helper'], 'zcode-cloud-worker.sh')
 
-    def test_doctor_lists_optional_review_without_breaking_older_skills(self):
+    def test_codex_review_is_explicit_frozen_and_review_only(self):
+        self.success_worker()
+        self.completed(self.enqueue('verify', key='v')['id'])
+        review = self.enqueue('review', key='codex', engine='codex')
+        self.assertEqual(review['route'], {**review['route'], 'engine': 'codex', 'model': 'fixture/codex',
+                                           'effort': 'medium', 'kind': 'review',
+                                           'helper': 'codex-readonly-review.sh'})
+        # A changed engine is a changed request, even under the same key.
+        self.enqueue('review', key='codex', engine='glm', error='idempotency_conflict')
+        self.assertEqual(self.completed(review['id'])['status'], 'succeeded')
+        from osrelay.artifacts import RelayError, route
+        self.assertEqual(route(self.skill, 'codex')['kind'], 'review')
+        # Codex only reviews here; Codex as manager is a task runtime, not a worker engine.
+        with self.assertRaises(RelayError):
+            route(self.skill, 'codex', 'worker')
+        with self.assertRaises(RelayError):
+            route(self.skill, 'grok', 'worker')
+        # The review effort is part of the frozen route; a helper that hides it is refused, not defaulted.
+        helper = self.skill / 'scripts/codex-readonly-review.sh'
+        helper.write_text(helper.read_text().replace(' -c model_reasoning_effort=medium', ''))
+        with self.assertRaises(RelayError) as refused:
+            route(self.skill, 'codex')
+        self.assertEqual(refused.exception.code, 'unknown_route')
+
+    def test_doctor_lists_optional_reviews_without_breaking_older_skills(self):
         installed = self.home / '.agents/skills/osslab-manager'
         installed.parent.mkdir(parents=True)
         installed.symlink_to(self.skill, target_is_directory=True)
         routes = self.call('doctor')['routes']
-        self.assertEqual(len(routes), 4)
-        self.assertEqual(routes[-1]['helper'], 'zcode-readonly-review.sh')
-        self.assertEqual(routes[-1]['kind'], 'review')
+        self.assertEqual([r['helper'] for r in routes[3:]], ['codex-readonly-review.sh', 'zcode-readonly-review.sh'])
+        self.assertEqual({r['kind'] for r in routes[3:]}, {'review'})
+        (self.skill / 'scripts/codex-readonly-review.sh').unlink()
+        self.assertEqual(len(self.call('doctor')['routes']), 4)
         (self.skill / 'scripts/zcode-readonly-review.sh').unlink()
         self.assertEqual(len(self.call('doctor')['routes']), 3)
 

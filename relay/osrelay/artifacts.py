@@ -158,13 +158,17 @@ def clean_env():
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
 
+REVIEW_ONLY = ("grok", "codex")
+
+
 def route(skill, engine, kind=None):
     """Legacy helpers remain the only model-routing source."""
     names = {"pi": "pi-runinfra-worker.sh", "glm": "zcode-cloud-worker.sh",
-             "grok": "grok-readonly-review.sh"}
+             "grok": "grok-readonly-review.sh", "codex": "codex-readonly-review.sh"}
+    kind = kind or ("review" if engine in REVIEW_ONLY else "worker")
     if kind == "review":
         names["glm"] = "zcode-readonly-review.sh"
-    if engine not in names:
+    if engine not in names or (kind == "worker" and engine in REVIEW_ONLY):
         raise RelayError("invalid_engine", engine)
     script = Path(skill) / "scripts" / names[engine]
     content = script.read_text()
@@ -179,10 +183,12 @@ def route(skill, engine, kind=None):
             effort = "helper-default"
     else:
         match = re.search(r"--model\s+([\w./-]+)", content)
-        level = re.search(r"--(?:thinking|reasoning-effort)\s+([\w-]+)", content)
+        level = re.search(r"(?:--(?:thinking|reasoning-effort)\s+|\bmodel_reasoning_effort=)([\w-]+)", content)
+        if engine == "codex" and not level:
+            raise RelayError("unknown_route", f"Cannot identify review effort in {script}")
         effort = level.group(1) if level else "helper-default"
     if not match:
         raise RelayError("unknown_route", f"Cannot identify model in {script}")
     return {"engine": engine, "model": match.group(1), "effort": effort,
-            "kind": kind or ("review" if engine == "grok" else "worker"),
+            "kind": kind,
             "helper": names[engine], "sha256": digest_file(script)}

@@ -317,8 +317,8 @@ class Store:
             raise RelayError("invalid_engine", "worker must be pi or glm")
         if resume and (kind != "worker" or engine != "pi"):
             raise RelayError("resume_refused", "Resume is only for the pi worker")
-        if kind == "review" and engine not in ("grok", "glm"):
-            raise RelayError("invalid_engine", "review must be grok or glm")
+        if kind == "review" and engine not in ("grok", "codex", "glm"):
+            raise RelayError("invalid_engine", "review must be grok, codex or glm")
         if kind == "verify" and not command:
             raise RelayError("missing_command", "verify needs -- command arguments")
         if kind == "review" and not prompt:

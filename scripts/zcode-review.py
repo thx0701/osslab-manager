@@ -119,8 +119,8 @@ def check_settings(snapshot):
     model = settings.get('model', {}).get('current', {})
     if model.get('modelId') != 'GLM-5.3' or model.get('providerId') != 'anthropic':
         raise ReviewError('ZCode did not select GLM-5.3 on the Coding Plan route')
-    if settings.get('thoughtLevel', {}).get('current') != 'high':
-        raise ReviewError('ZCode did not enable High thinking')
+    if settings.get('thoughtLevel', {}).get('current') != 'max':
+        raise ReviewError('ZCode did not enable Max thinking')
     if settings.get('mode', {}).get('current') != 'plan':
         raise ReviewError('ZCode did not enable read-only plan mode')
 
@@ -135,13 +135,13 @@ def review(workdir, prompt_file, cli, timeout=900):
         workspace = {'workspacePath': str(Path(workdir).resolve()),
                      'workspaceKey': str(Path(workdir).resolve())}
         result = backend.request('session/create', {
-            'workspace': workspace, 'mode': 'plan', 'thoughtLevel': 'high',
+            'workspace': workspace, 'mode': 'plan', 'thoughtLevel': 'max',
             'titleGenerationEnabled': False, 'toolAllowlist': ['Read', 'Grep']})
         session_id = result.get('session', {}).get('sessionId')
         if not session_id:
             raise ReviewError('ZCode returned no session ID')
         backend.request('session/setThoughtLevel', {
-            'sessionId': session_id, 'thoughtLevel': 'high', 'persistAsWorkspaceLastUsed': False})
+            'sessionId': session_id, 'thoughtLevel': 'max', 'persistAsWorkspaceLastUsed': False})
         check_settings(backend.request('session/read', {'sessionId': session_id}))
         backend.request('session/subscribe', {
             'sessionId': session_id, 'deliveryKind': 'desktop-continuous',
@@ -161,7 +161,7 @@ def review(workdir, prompt_file, cli, timeout=900):
         if not report:
             raise ReviewError('ZCode returned an empty review report')
         timestamp = datetime.now(ZoneInfo('Asia/Taipei')).isoformat(timespec='seconds')
-        return f'審查：zcode / GLM-5.3 high @ {timestamp}\n\n{report}\n'
+        return f'審查：zcode / GLM-5.3 max @ {timestamp}\n\n{report}\n'
     finally:
         if session_id:
             try:
@@ -183,7 +183,7 @@ def main():
         print('ZCode review interrupted', file=sys.stderr)
         return 130
     except (ReviewError, OSError, ValueError):
-        print('ZCode review failed; model/High/read-only/completion could not be verified', file=sys.stderr)
+        print('ZCode review failed; model/Max/read-only/completion could not be verified', file=sys.stderr)
         return 1
 
 

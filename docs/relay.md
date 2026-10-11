@@ -2,7 +2,7 @@
 
 適用已安裝 `osrelay` 的主機上當經理的 Codex／Claude Code（Paseo 或一般終端機皆可；本 skill 只支援這兩種經理）。經理照 SKILL.md 做盤點、拆單、判斷與逐張本機提交；
 Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿用 session 設定。
-施工預設 pi，備援明確 `--engine glm`，日常 review 仍走 Grok helper，指定 `review --engine glm` 則用完整 GLM-5.3 High 唯讀 helper。Claude Haiku 不在 `osrelay` 的引擎表裡，不要用手動 helper 繞過進行中的 Relay 任務。模型正本是本 skill helper
+施工預設 pi，備援明確 `--engine glm`，review 依序 Grok → `--engine codex`（GPT-6 Astra medium）→ `--engine glm`（完整 GLM-5.3 max），三者都可指定（見 SKILL 第五節；`--engine codex` 是審查員，跟任務的 `--runtime codex` 無關）。Claude Haiku 不在 `osrelay` 的引擎表裡，不要用手動 helper 繞過進行中的 Relay 任務。模型正本是本 skill helper
 （`osrelay doctor` 的 routes 會列出實際值），每個 attempt 凍結整份 skill。
 
 先 `osrelay doctor`、`osrelay list`。查既有任務的 `context <task> --runtime codex|claude`，
@@ -58,9 +58,9 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
    沒有 active attempt 時先逐檔 `git add -N -- <允許的新增檔>`，再下 verify 指令；排隊後也不能改 index。
 6. 審查包仍照原 skill 寫。`review <task> --owner <角色> --key <審查鍵> --prompt <審查包>`，
    等待、讀完整報告、逐條核實。非空報告不代表無 findings；需要修正就新 run，之後重驗重審。
-   review 不帶 engine 預設 Grok；指定 GLM 加 `--engine glm`，工人 glm 路由仍是 Flash。每次重跑 run／verify／review 都用新 key；原 key 只重送同一請求。
+   review 不帶 engine 是 Grok；換 Codex 或 GLM 加 `--engine codex`／`--engine glm`，工人 glm 路由仍是 Flash。每次重跑 run／verify／review 都用新 key；原 key 只重送同一請求。
    Relay 比第六節嚴：工作樹一變，舊 review 就不算數，機械修復也要新跑一輪 review 才能 accept。
-   低階單（第五節）不跑 Grok，accept 時加 `--review-waiver <低階理由>`；該 task 跑過任何 review 後就不能豁免。
+   低階單（第五節）不跑外部審查，accept 時加 `--review-waiver <低階理由>`；該 task 跑過任何 review 後就不能豁免。
 7. 已核實才 `accept <task> --owner <角色> --note <核實結論>`。Relay 檢查每條 verify 與最新 review（或豁免）成功、
    對應目前 Git 指紋且證據未被置換；不代替人判斷 oracle。成功後是 `accepted`，仍保留 worktree 占用。
 8. 照原 skill 逐張本機 commit，再 `finalize <task> --owner <角色> --commit <SHA> --note <提交核實>`。
