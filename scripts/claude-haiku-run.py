@@ -10,6 +10,8 @@ import sys
 EXPECTED_MODEL = "claude-haiku-5-5"
 API_KEY_AUTH = {"ANTHROPIC_API_KEY", "apiKeyHelper"}
 MODEL_LABEL = re.compile(r"[A-Za-z0-9._:-]{1,64}")
+# Claude Code may emit UI system events (e.g. ui_invalidate) before init; skip at most this many.
+PRE_INIT_LIMIT = 20
 
 
 def label(value):
@@ -62,17 +64,25 @@ def run(workdir, prompt, cli):
         text=True,
     )
     try:
-        line = proc.stdout.readline()
-        try:
-            event = json.loads(line) if line else None
-        except ValueError:
-            event = None
-        if not isinstance(event, dict) or event.get("type") != "system" or event.get("subtype") != "init":
-            return reject(proc, "claude worker rejected: model=missing")
+        # Hold earlier system events until init passes the checks; any other event before init means
+        # the worker started without a verified model and login, so reject it.
+        held = []
+        while True:
+            line = proc.stdout.readline()
+            try:
+                event = json.loads(line) if line else None
+            except ValueError:
+                event = None
+            if not isinstance(event, dict) or event.get("type") != "system" or len(held) > PRE_INIT_LIMIT:
+                return reject(proc, "claude worker rejected: model=missing")
+            if event.get("subtype") == "init":
+                break
+            held.append(line)
         if event.get("model") != EXPECTED_MODEL:
             return reject(proc, "claude worker rejected: model=" + label(event.get("model")))
         if event.get("apiKeySource") in API_KEY_AUTH:
             return reject(proc, "claude worker rejected: auth=ANTHROPIC_API_KEY")
+        sys.stdout.writelines(held)
         sys.stdout.write(line)
         sys.stdout.flush()
         seen = set()
