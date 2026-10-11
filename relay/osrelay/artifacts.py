@@ -14,9 +14,10 @@ from datetime import datetime, timedelta, timezone
 
 
 class RelayError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, details=None):
         super().__init__(message)
         self.code = code
+        self.details = details
 
 
 def now():
@@ -157,17 +158,25 @@ def clean_env():
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
 
-def route(skill, engine):
+def route(skill, engine, kind=None):
     """Legacy helpers remain the only model-routing source."""
-    names = {"pi": "pi-openrouter-worker.sh", "glm": "zcode-cloud-worker.sh",
+    names = {"pi": "pi-runinfra-worker.sh", "glm": "zcode-cloud-worker.sh",
              "grok": "grok-readonly-review.sh"}
+    if kind == "review":
+        names["glm"] = "zcode-readonly-review.sh"
     if engine not in names:
         raise RelayError("invalid_engine", engine)
     script = Path(skill) / "scripts" / names[engine]
     content = script.read_text()
     if engine == "glm":
         match = re.search(r"\bZCODE_MODEL=([\w./-]+)", content)
-        effort = "helper-default"
+        if kind == "review":
+            level = re.search(r"\bZCODE_REVIEW_THOUGHT=([\w-]+)", content)
+            if not level:
+                raise RelayError("unknown_route", f"Cannot identify review thinking in {script}")
+            effort = level.group(1)
+        else:
+            effort = "helper-default"
     else:
         match = re.search(r"--model\s+([\w./-]+)", content)
         level = re.search(r"--(?:thinking|reasoning-effort)\s+([\w-]+)", content)
@@ -175,4 +184,5 @@ def route(skill, engine):
     if not match:
         raise RelayError("unknown_route", f"Cannot identify model in {script}")
     return {"engine": engine, "model": match.group(1), "effort": effort,
+            "kind": kind or ("review" if engine == "grok" else "worker"),
             "helper": names[engine], "sha256": digest_file(script)}

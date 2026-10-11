@@ -69,10 +69,15 @@ def child(state, aid, lock_fd):
         result['before'] = before
         if before != attempt['before_state']:
             raise RelayError('source_changed', 'Worktree changed between enqueue and start')
+        env = clean_env()
+        if attempt['kind'] == 'worker' and attempt['route'].get('engine') == 'pi':
+            # The worker driver asks questions through this same Relay release and state (v1.3).
+            env.update(OSRELAY_ATTEMPT=aid, OSRELAY_STATE=str(store.root),
+                       OSRELAY_BIN=str(Path(__file__).resolve().parents[1] / 'bin' / 'osrelay'))
         with open(directory / 'stdout.log', 'xb') as stdout, open(directory / 'stderr.log', 'xb') as stderr:
             process = subprocess.Popen(command_for(attempt, task), cwd=task['workdir'],
                                        stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                       env=clean_env(), pass_fds=(lock_fd,))
+                                       env=env, pass_fds=(lock_fd,))
             result['exit_code'] = process.wait()
         result['after'] = snapshot(task['workdir'])
         changed = before != result['after']
@@ -148,6 +153,7 @@ def reconcile(store, skip=()):
                               result['exit_code'] if result else None, error, now(), attempt['id']))
             store.db.execute('UPDATE tasks SET state=?,updated=? WHERE id=?',
                              (task_state, now(), attempt['task_id']))
+            store.withdraw_questions(attempt['id'])
             store.event(attempt['task_id'], 'finished', {'status': status, 'result': result, 'error': error}, attempt['id'])
 
 

@@ -75,7 +75,7 @@ class RelayTest(unittest.TestCase):
 
     def enqueue(self, kind='run', key='one', task='t1', owner='manager', **kwargs):
         args = [kind, task, '--owner', owner, '--key', key, '--skill', self.skill]
-        if kind == 'run' and kwargs.get('engine'):
+        if kind in ('run', 'review') and kwargs.get('engine'):
             args += ['--engine', kwargs['engine']]
         if kind == 'run' and kwargs.get('resume'):
             args.append('--resume')
@@ -150,6 +150,60 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(self.enqueue(task='t2')['status'], 'queued')
         self.assertEqual(self.completed(self.call('status', 't2')['attempts'][0]['id'])['status'], 'succeeded')
 
+    def test_glm_review_is_explicit_frozen_and_distinct_from_glm_worker(self):
+        self.success_worker()
+        self.completed(self.enqueue('verify', key='v')['id'])
+        default = self.enqueue('review', key='default')
+        self.assertEqual(default['route']['engine'], 'grok')
+        self.completed(default['id'])
+        review = self.enqueue('review', key='glm', engine='glm')
+        self.assertEqual(review['route']['engine'], 'glm')
+        self.assertEqual(review['route']['model'], 'GLM-5.3')
+        self.assertEqual(review['route']['effort'], 'max')
+        self.assertEqual(review['route']['helper'], 'zcode-readonly-review.sh')
+        # A changed engine is a changed request, even under the same key.
+        self.enqueue('review', key='glm', error='idempotency_conflict')
+        self.assertEqual(self.completed(review['id'])['status'], 'succeeded')
+        self.assertEqual(self.call('accept', 't1', '--owner', 'manager', '--note', 'GLM checked')['state'], 'accepted')
+        from osrelay.artifacts import route
+        self.assertEqual(route(self.skill, 'glm')['helper'], 'zcode-cloud-worker.sh')
+
+    def test_doctor_lists_optional_review_without_breaking_older_skills(self):
+        installed = self.home / '.agents/skills/osslab-manager'
+        installed.parent.mkdir(parents=True)
+        installed.symlink_to(self.skill, target_is_directory=True)
+        routes = self.call('doctor')['routes']
+        self.assertEqual(len(routes), 4)
+        self.assertEqual(routes[-1]['helper'], 'zcode-readonly-review.sh')
+        self.assertEqual(routes[-1]['kind'], 'review')
+        (self.skill / 'scripts/zcode-readonly-review.sh').unlink()
+        self.assertEqual(len(self.call('doctor')['routes']), 3)
+
+    def test_new_file_intent_to_add_before_verification_remains_current(self):
+        self.success_worker()
+        (self.repo / 'new.txt').write_text('approved new file\n')
+        subprocess.run(['git', '-C', str(self.repo), 'add', '-N', '--', 'new.txt'], check=True)
+        self.completed(self.enqueue('verify', key='v')['id'])
+        self.completed(self.enqueue('review', key='r')['id'])
+        self.assertEqual(self.call('accept', 't1', '--owner', 'manager', '--note', 'New file verified')['state'], 'accepted')
+        sha = self.commit_repo()
+        self.assertEqual(self.call('finalize', 't1', '--owner', 'manager', '--commit', sha,
+                                  '--note', 'Verified tree committed')['state'], 'done')
+
+    def test_blocking_repair_reuses_mother_task_with_new_frozen_ticket(self):
+        first = self.success_worker()
+        self.create('repair-ticket')
+        self.enqueue(task='repair-ticket', error='worktree_reserved')
+        self.write_ticket(edit='edited\n', repair='repair-ticket')
+        repair = self.enqueue(key='repair-attempt')
+        frozen = Path(repair['directory']) / 'ticket.original.md'
+        self.assertIn('repair-ticket', frozen.read_text())
+        self.assertNotIn('repair-ticket', (Path(first['directory']) / 'ticket.original.md').read_text())
+        self.assertEqual(self.completed(repair['id'])['status'], 'succeeded')
+        self.completed(self.enqueue('verify', key='v')['id'])
+        self.completed(self.enqueue('review', key='r')['id'])
+        self.assertEqual(self.call('accept', 't1', '--owner', 'manager', '--note', 'Mother and repair checked')['state'], 'accepted')
+
     def test_concurrent_idempotency_and_reservation(self):
         self.create()
         with concurrent.futures.ThreadPoolExecutor(4) as pool:
@@ -162,12 +216,38 @@ class RelayTest(unittest.TestCase):
         self.call('wait', results[0]['id'], '--timeout', '0', error='wait_timeout')
         self.assertEqual(self.call('status', 't1')['state'], 'running')
 
+    def test_silence_notifies_once_and_does_not_cancel(self):
+        self.write_ticket(gate=str(self.base / 'hold'))
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        self.eventually(lambda: self.started.exists())
+        directory = Path(attempt['directory'])
+        first = subprocess.run([*CLI, '--state', str(self.state), 'wait', attempt['id'],
+                                '--timeout', '5', '--silence', '0'], cwd=ROOT,
+                               capture_output=True, text=True, timeout=20, env=self.env)
+        self.assertEqual(first.returncode, 4, first.stderr)
+        self.assertEqual(json.loads(first.stderr)['error']['code'], 'wait_silent')
+        self.assertEqual(self.call('status', 't1')['state'], 'running')
+        again = subprocess.run([*CLI, '--state', str(self.state), 'wait', attempt['id'],
+                                '--timeout', '0.3', '--silence', '0'], cwd=ROOT,
+                               capture_output=True, text=True, timeout=20, env=self.env)
+        self.assertEqual(again.returncode, 3, again.stderr)
+        self.assertEqual(json.loads(again.stderr)['error']['code'], 'wait_timeout')
+        with open(directory / 'stdout.log', 'ab') as stream:
+            stream.write(b'x')
+        third = subprocess.run([*CLI, '--state', str(self.state), 'wait', attempt['id'],
+                                '--timeout', '5', '--silence', '0'], cwd=ROOT,
+                               capture_output=True, text=True, timeout=20, env=self.env)
+        self.assertEqual(third.returncode, 4, third.stderr)
+        self.assertEqual(self.call('status', 't1')['state'], 'running')
+
     def test_freeze_and_missing_receipt_recovery_backup(self):
         self.write_ticket(edit='partial\n', no_receipt=True)
         self.create()
         attempt = self.enqueue()
         self.write_ticket(edit='wrong\n')
-        (self.skill / 'scripts/pi-openrouter-worker.sh').write_text('exit 42\n')
+        (self.skill / 'scripts/pi-runinfra-worker.sh').write_text('exit 42\n')
         self.runner()
         done = self.completed(attempt['id'])
         self.assertEqual(done['status'], 'failed')
@@ -577,6 +657,30 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(self.completed(again['id'])['status'], 'succeeded')
         self.assertEqual(self.enqueue(key='resume-new', resume=True)['request']['session'], again['id'])
 
+    def test_bare_no_doubt_with_punctuation_or_bullet_is_not_a_doubt(self):
+        from osrelay.store import receipt_has_doubt
+        path = self.base / 'receipt.md'
+        for body, doubt in (('無', False), ('無。', False), ('無.', False), ('- 無', False), ('- 無。', False),
+                            ('  無。  ', False), ('', False),
+                            ('無。但 CDP 未驗', True), ('- 無真電話／雲端 ASR，皆未驗', True),
+                            ('- 無。\n- 正式站未驗', True), ('契約沒寫清楚', True)):
+            with self.subTest(body=body):
+                path.write_text(f'# 回執\n## 4. 風險與存疑\n{body}\n## 5. 問答\n無\n')
+                self.assertEqual(receipt_has_doubt(path), doubt)
+
+    def test_resume_accepts_a_receipt_that_says_none_with_a_full_stop(self):
+        # 2026-10-10 真機冒煙：工人照模板寫「無」但多了句號，接續被當成有存疑而拒絕。
+        created = self.call('create', '--workdir', self.repo, '--ticket', self.ticket, '--owner', 'manager',
+                            '--id', 't1')
+        fresh = self.enqueue()
+        self.runner()
+        self.assertEqual(self.completed(fresh['id'])['status'], 'succeeded')
+        self.assertTrue(self.session_file(fresh['id'], created['workdir']).is_file())
+        (Path(fresh['directory']) / 'receipt.md').write_text('## 4. 風險與存疑\n無。\n')
+        resumed = self.enqueue(key='resume', resume=True)
+        self.assertTrue(resumed['request']['resume'])
+        self.assertEqual(self.completed(resumed['id'])['status'], 'succeeded')
+
     def test_helper_refusal_fails_attempt_without_recovery_or_using_the_limit(self):
         self.write_ticket(edit='edited\n')
         created = self.call('create', '--workdir', self.repo, '--ticket', self.ticket, '--owner', 'manager', '--id', 't1')
@@ -648,40 +752,90 @@ class RelayTest(unittest.TestCase):
         kept = self.enqueue(key='kept', resume=True)
         self.assertEqual(self.completed(kept['id'])['status'], 'succeeded')
 
-    def test_real_pi_helper_opens_then_continues_the_session(self):
-        # The real osslab-manager helper (snapshot) with a fake pi: no plant, no model call.
+    def real_pi_skill(self, ask=False):
+        """The real osslab-manager pi helper and RPC driver (snapshot) with a fake RPC pi: no model call."""
         shutil.copytree(ROOT / 'tests/fixtures/real-pi', self.skill, dirs_exist_ok=True)
         secrets = self.home / '.openclaw/secrets'
         secrets.mkdir(parents=True)
-        (secrets / 'openrouter.env').write_text('OPENROUTER_API_KEY=fake-key\n')
+        (secrets / 'glm-5.3-flash.env').write_text('GLM_53_FLASH_API_KEY=fake-key\n')
         fake = self.base / 'bin'
         fake.mkdir()
         (fake / 'pi').write_text(f"""#!{sys.executable}
 import json, os, pathlib, re, sys
 args = sys.argv[1:]
+command = json.loads(sys.stdin.readline())
+prompt = command['message']
 with open(os.environ['HOME'] + '/pi-argv.jsonl', 'a') as log:
-    log.write(json.dumps(args) + '\\n')
+    log.write(json.dumps({{'argv': args, 'prompt': prompt, 'channel': os.environ.get('OSLAB_ASK_CHANNEL'),
+                          'attempt': os.environ.get('OSRELAY_ATTEMPT')}}) + '\\n')
 if '--session-dir' in args:
     d = pathlib.Path(args[args.index('--session-dir') + 1])
     (d / ('2026_' + args[args.index('--session-id') + 1] + '.jsonl')).write_text('{{}}\\n')
-ticket = re.search(r'工單：(\\S+?\\.md)', args[-1])[1]
+def ev(**event):
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+ev(type='response', id=command.get('id'), command='prompt', success=True, data={{'disposition': 'started'}})
+answer = None
+if {ask!r}:
+    question = {{'kind': 'scope_conflict', 'where': 'tests/x.py', 'options': ['准許改', '不改'],
+                'recommendation': '准許改', 'impact': '測試段停下'}}
+    ev(type='tool_execution_start', toolCallId='call_1', toolName='ask_manager', args=question)
+    ev(type='extension_ui_request', id='ui-1', method='input', title='osslab-ask:call_1', placeholder='tests/x.py',
+       timeout=60000)
+    for line in sys.stdin:
+        record = json.loads(line)
+        if record.get('type') == 'extension_ui_response' and record.get('id') == 'ui-1':
+            answer = record.get('value')
+            break
+    ev(type='tool_execution_end', toolCallId='call_1', toolName='ask_manager', isError=False, result={{}})
+ticket = re.search(r'工單：(\\S+?\\.md)', prompt)[1]
 receipt = re.search(r'本輪回執唯一指定路徑：([^\\n]+)', pathlib.Path(ticket).read_text())[1]
 pathlib.Path('source.txt').write_text('edited\\n')
-pathlib.Path(receipt).write_text('# 回執\\n## 4. 風險與存疑\\n無\\n')
+pathlib.Path(receipt).write_text('# 回執\\n## 4. 風險與存疑\\n無\\n## 5. 問答\\n' + str(answer) + '\\n')
+ev(type='message_end', message={{'role': 'assistant', 'stopReason': 'stop', 'content': [{{'type': 'text', 'text': 'done'}}]}})
+ev(type='agent_settled')
+sys.stdin.read()
 """)
         (fake / 'pi').chmod(0o700)
         self.env['PATH'] = f"{fake}:{self.env['PATH']}"
         self.call('create', '--workdir', self.repo, '--ticket', self.ticket, '--owner', 'manager', '--id', 't1')
         self.runner()
+
+    def pi_calls(self):
+        return [json.loads(line) for line in (self.home / 'pi-argv.jsonl').read_text().splitlines()]
+
+    def test_real_pi_helper_opens_then_continues_the_session(self):
+        self.real_pi_skill()
         fresh = self.enqueue()
+        # Relay still reads the model route from the RPC helper's text.
+        self.assertEqual((fresh['route']['model'], fresh['route']['effort'], fresh['route']['helper']),
+                         ('deepseek-v4-1-flash', 'high', 'pi-runinfra-worker.sh'))
         self.assertEqual(self.completed(fresh['id'])['status'], 'succeeded')
         resumed = self.enqueue(key='resume', resume=True)
         self.assertEqual(self.completed(resumed['id'])['status'], 'succeeded')
-        calls = [json.loads(line) for line in (self.home / 'pi-argv.jsonl').read_text().splitlines()]
-        self.assertEqual([c[c.index('--session-id') + 1] for c in calls], [fresh['id'], fresh['id']])
-        self.assertNotIn('記憶不是證據', calls[0][-1])
-        self.assertIn('記憶不是證據', calls[1][-1])
+        calls = self.pi_calls()
+        self.assertEqual([c['argv'][c['argv'].index('--session-id') + 1] for c in calls], [fresh['id'], fresh['id']])
+        self.assertNotIn('記憶不是證據', calls[0]['prompt'])
+        self.assertIn('記憶不是證據', calls[1]['prompt'])
         self.assertIn('session=resumed(1/2', (Path(resumed['directory']) / 'stderr.log').read_text())
+        # pi itself runs in RPC mode and only learns that a question channel exists.
+        self.assertEqual([c['argv'][:2] for c in calls], [['--mode', 'rpc']] * 2)
+        self.assertEqual([(c['channel'], c['attempt']) for c in calls], [('1', None)] * 2)
+
+    def test_real_driver_asks_through_relay_and_delivers_the_answer(self):
+        self.real_pi_skill(ask=True)
+        attempt = self.enqueue()
+        asked = subprocess.run([*CLI, '--state', str(self.state), 'wait', attempt['id'], '--timeout', '20'], cwd=ROOT,
+                               capture_output=True, text=True, timeout=40, env=self.env)
+        self.assertEqual(asked.returncode, 5, asked.stderr + (Path(attempt['directory']) / 'stderr.log').read_text())
+        question = json.loads(asked.stderr)['error']['details']['questions'][0]
+        self.assertEqual((question['qid'], question['question']['where']), ('call_1', 'tests/x.py'))
+        self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'manager', '--text', '准許改 tests/x.py')
+        self.assertEqual(self.call('wait', attempt['id'], '--timeout', '30')['status'], 'succeeded')
+        receipt = (Path(attempt['directory']) / 'receipt.md').read_text()
+        self.assertIn('## 5. 問答\n准許改 tests/x.py', receipt)
+        log = (Path(attempt['directory']) / 'stdout.log').read_text()
+        self.assertIn('經理回覆：准許改 tests/x.py', log)
+        self.assertEqual(self.call('status', 't1')['questions'][0]['state'], 'answered')
 
     def test_v1_database_upgrades_without_dropping_tasks(self):
         import sqlite3
@@ -720,11 +874,200 @@ pathlib.Path(receipt).write_text('# 回執\\n## 4. 風險與存疑\\n無\\n')
         self.assertIsNone(listed[0]['goal_id'])
         self.assertIsNone(listed[0]['chain'])
         with sqlite3.connect(self.state / 'relay.sqlite3') as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
             columns = {row[1] for row in db.execute('PRAGMA table_info(tasks)')}
+            self.assertTrue(db.execute("SELECT 1 FROM sqlite_master WHERE name='questions'").fetchone())
         self.assertIn('goal_id', columns)
         self.assertIn('chain', columns)
         self.assertEqual(self.enqueue(task='old', key='one')['id'], 'attempt-old')
+
+    # --- v1.3 worker questions -------------------------------------------------
+
+    QUESTION = {'kind': 'scope_conflict', 'where': 'tests/x.py 不在允許清單', 'options': ['准許改', '不改'],
+                'recommendation': '准許改：既有斷言已過時', 'impact': '測試段停下'}
+
+    def wait_raw(self, aid, *extra):
+        return subprocess.run([*CLI, '--state', str(self.state), 'wait', aid, *map(str, extra)], cwd=ROOT,
+                              capture_output=True, text=True, timeout=30, env=self.env)
+
+    def ask_cli(self, action, aid, qid, *extra, error=None):
+        return self.call('_ask', action, aid, '--qid', qid, *extra, error=error)
+
+    def extra_task(self, name, owner, **options):
+        """Another task on its own worktree, so several workers can run at once."""
+        repo = self.base / ('repo-' + name)
+        repo.mkdir()
+        for args in [('init', '-q'), ('config', 'user.name', 'Test'), ('config', 'user.email', 'test@example.invalid')]:
+            subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
+        (repo / 'source.txt').write_text('initial\n')
+        subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'commit', '-qm', 'fixture'], check=True)
+        ticket = self.base / ('ticket-' + name + '.md')
+        options['started'] = str(self.base / ('started-' + name))
+        ticket.write_text(json.dumps(options) + '\nDo the fixture task.\n')
+        self.call('create', '--workdir', repo, '--ticket', ticket, '--owner', owner, '--id', name)
+        return self.enqueue(task=name, owner=owner)
+
+    def test_worker_question_reported_once_and_answer_reaches_worker(self):
+        result = self.base / 'ask.json'
+        self.write_ticket(edit='edited\n', ask={'qid': 'call_1', 'timeout_ms': 20000,
+                                                'payload': self.QUESTION, 'result': str(result)})
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        # Once the question exists, --silence 0 makes exit 4 due at once: the question still wins.
+        self.eventually(lambda: self.call('questions'))
+        first = self.wait_raw(attempt['id'], '--timeout', '10', '--silence', '0')
+        self.assertEqual(first.returncode, 5, first.stderr)
+        error = json.loads(first.stderr)['error']
+        self.assertEqual(error['code'], 'question_pending')
+        self.assertIn('qid=call_1', error['message'])
+        self.assertIn('kind=scope_conflict', error['message'])
+        self.assertEqual(error['details']['questions'][0]['question'], self.QUESTION)
+        # Reported once: waiting again does not spin on the same question, and silence (4) never masks it.
+        again = self.wait_raw(attempt['id'], '--timeout', '0.5')
+        self.assertEqual(again.returncode, 3, again.stderr)
+        listed = self.call('questions', '--owner', 'manager')
+        self.assertEqual([(q['attempt'], q['qid'], q['state']) for q in listed],
+                         [(attempt['id'], 'call_1', 'pending')])
+        self.assertIsNotNone(listed[0]['notified'])
+        self.assertEqual(self.call('questions', '--owner', 'someone-else'), [])
+        self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'someone-else', '--text', 'x',
+                  error='owner_mismatch')
+        answered = self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'manager',
+                             '--text', '准許改 tests/x.py')
+        self.assertEqual(answered['state'], 'answered')
+        self.assertEqual(self.completed(attempt['id'])['status'], 'succeeded')
+        record = json.loads(result.read_text())
+        self.assertEqual((record['post'], record['poll']['state'], record['poll']['answer']),
+                         (0, 'answered', '准許改 tests/x.py'))
+        status = self.call('status', 't1')
+        self.assertEqual([(q['qid'], q['state'], q['answered_by']) for q in status['questions']],
+                         [('call_1', 'answered', 'manager')])
+        kinds = [event['kind'] for event in status['events']]
+        self.assertLess(kinds.index('question_asked'), kinds.index('question_answered'))
+        self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'manager', '--text', 'again',
+                  error='question_expired')
+
+    def test_wait_reports_questions_of_the_same_owner_from_other_attempts(self):
+        self.write_ticket(gate=str(self.base / 'gate'))
+        self.create()
+        quiet = self.enqueue()
+        ask = {'qid': 'call_b', 'timeout_ms': 4000, 'payload': self.QUESTION, 'result': str(self.base / 'b.json')}
+        mine = self.extra_task('b', 'manager', ask=ask)
+        theirs = self.extra_task('c', 'other', ask=dict(ask, qid='call_c', result=str(self.base / 'c.json')))
+        self.runner()
+        self.eventually(lambda: len(self.call('questions')) == 2)
+        reported = self.wait_raw(quiet['id'], '--timeout', '5')
+        self.assertEqual(reported.returncode, 5, reported.stderr)
+        items = json.loads(reported.stderr)['error']['details']['questions']
+        self.assertEqual([(q['attempt'], q['qid']) for q in items], [(mine['id'], 'call_b')])
+        self.assertEqual(self.wait_raw(quiet['id'], '--timeout', '0.5').returncode, 3)
+        other = self.wait_raw(theirs['id'], '--timeout', '5')
+        self.assertEqual(other.returncode, 5, other.stderr)
+        self.assertEqual([q['qid'] for q in json.loads(other.stderr)['error']['details']['questions']], ['call_c'])
+
+    def test_unanswered_question_expires_and_answer_is_refused(self):
+        result = self.base / 'ask.json'
+        self.write_ticket(ask={'qid': 'call_1', 'timeout_ms': 300, 'payload': self.QUESTION, 'result': str(result)})
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        self.eventually(lambda: result.exists())
+        self.assertEqual(json.loads(result.read_text())['poll']['state'], 'expired')
+        self.assertEqual(self.completed(attempt['id'])['status'], 'succeeded')
+        self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'manager', '--text', 'late',
+                  error='question_expired')
+        status = self.call('status', 't1')
+        self.assertEqual(status['questions'][0]['state'], 'expired')
+        expired = [e['body'] for e in status['events'] if e['kind'] == 'question_expired']
+        self.assertEqual(expired, [{'qid': 'call_1', 'by': 'deadline'}])
+
+    def test_open_question_is_withdrawn_when_the_attempt_finishes(self):
+        result = self.base / 'ask.json'
+        self.write_ticket(ask={'qid': 'call_1', 'timeout_ms': 60000, 'payload': self.QUESTION,
+                               'result': str(result), 'wait': False})
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        # The finished attempt was never waited on, so the question may or may not have been reported.
+        self.eventually(lambda: self.call('status', 't1')['state'] == 'awaiting_acceptance')
+        status = self.call('status', 't1')
+        self.assertEqual(status['questions'][0]['state'], 'withdrawn')
+        self.assertIn('question_withdrawn', [e['kind'] for e in status['events']])
+        self.assertEqual(self.call('questions'), [])
+        self.call('answer', attempt['id'], '--qid', 'call_1', '--owner', 'manager', '--text', 'late',
+                  error='question_expired')
+        self.assertEqual(self.completed(attempt['id'])['status'], 'succeeded')
+
+    def test_question_channel_validates_and_is_idempotent(self):
+        self.write_ticket(gate=str(self.base / 'gate'))
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        self.eventually(lambda: self.started.exists())
+        aid = attempt['id']
+        good = json.dumps(self.QUESTION)
+        for qid, timeout, payload in [
+                ('a b', 1000, good), ('call_1', 0, good), ('call_1', 3600001, good),
+                ('call_1', 1000, json.dumps(dict(self.QUESTION, kind='production'))),
+                ('call_1', 1000, json.dumps(dict(self.QUESTION, options=['only one']))),
+                ('call_1', 1000, json.dumps(dict(self.QUESTION, where=' '))),
+                ('call_1', 1000, '[1]'), ('call_1', 1000, 'not json')]:
+            with self.subTest(qid=qid, timeout=timeout, payload=payload[:30]):
+                self.ask_cli('post', aid, qid, '--timeout-ms', timeout, '--payload', payload, error='invalid_question')
+        posted = self.ask_cli('post', aid, 'call_1', '--timeout-ms', 60000, '--payload', good)
+        self.assertEqual(posted['state'], 'pending')
+        self.assertEqual(self.ask_cli('post', aid, 'call_1', '--timeout-ms', 60000, '--payload', good)['deadline'],
+                         posted['deadline'])
+        self.ask_cli('post', aid, 'call_1', '--timeout-ms', 60000,
+                     '--payload', json.dumps(dict(self.QUESTION, impact='other')), error='idempotency_conflict')
+        self.assertEqual(self.ask_cli('expire', aid, 'call_1')['state'], 'expired')
+        self.assertEqual(self.ask_cli('poll', aid, 'call_1')['state'], 'expired')
+        self.ask_cli('post', aid, 'call_2', '--timeout-ms', 60000, '--payload', good)
+        self.call('answer', aid, '--qid', 'call_2', '--owner', 'manager', '--text', 'ok')
+        # The worker's own timeout cannot erase an answer that already arrived.
+        self.assertEqual(self.ask_cli('expire', aid, 'call_2')['state'], 'answered')
+        closed = [(e['kind'], e['body']['qid']) for e in self.call('status', 't1')['events'] if e['kind'].startswith('question_')]
+        self.assertNotIn(('question_expired', 'call_2'), closed)
+        self.ask_cli('poll', aid, 'missing', error='not_found')
+        # Past the deadline with nobody polling: the answer is refused and the expiry is recorded.
+        self.ask_cli('post', aid, 'call_4', '--timeout-ms', 200, '--payload', good)
+        time.sleep(.3)
+        self.call('answer', aid, '--qid', 'call_4', '--owner', 'manager', '--text', 'late', error='question_expired')
+        self.assertEqual(self.ask_cli('poll', aid, 'call_4')['state'], 'expired')
+        (self.base / 'gate').touch()
+        self.assertEqual(self.completed(aid)['status'], 'succeeded')
+        self.ask_cli('post', aid, 'call_3', '--timeout-ms', 60000, '--payload', good, error='attempt_not_running')
+
+    def test_only_pi_workers_get_the_question_channel(self):
+        out = self.base / 'env.json'
+        self.write_ticket(edit='edited\n', env_out=str(out))
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        self.assertEqual(self.completed(attempt['id'])['status'], 'succeeded')
+        env = json.loads(out.read_text())
+        self.assertEqual(env['OSRELAY_ATTEMPT'], attempt['id'])
+        self.assertEqual(env['OSRELAY_STATE'], str(self.state.resolve()))
+        self.assertEqual(Path(env['OSRELAY_BIN']), ROOT / 'bin' / 'osrelay')
+        out.unlink()
+        glm = self.enqueue(key='glm', engine='glm')
+        self.assertEqual(self.completed(glm['id'])['status'], 'succeeded')
+        self.assertEqual(json.loads(out.read_text()), dict.fromkeys(env))
+
+    def test_v2_database_upgrades_to_questions_and_v4_is_refused(self):
+        import sqlite3
+        self.create()
+        with sqlite3.connect(self.state / 'relay.sqlite3') as db:
+            db.execute('DROP TABLE questions')
+            db.execute('PRAGMA user_version=2')
+        self.assertEqual(self.call('list')[0]['id'], 't1')
+        self.assertEqual(self.call('status', 't1')['questions'], [])
+        with sqlite3.connect(self.state / 'relay.sqlite3') as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            db.execute('PRAGMA user_version=4')
+        self.call('list', error='schema_version')
 
     def test_accepted_task_refuses_new_work_handoff_and_block(self):
         accepted = self.accept_current()

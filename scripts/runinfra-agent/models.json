@@ -1,0 +1,37 @@
+{
+  "providers": {
+    "runinfra": {
+      "baseUrl": "https://api.runinfra.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$GLM_53_FLASH_API_KEY",
+      "models": [
+        {
+          "id": "deepseek-v4-1-flash",
+          "name": "RunInfra DeepSeek V4.1 Flash",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 1048576,
+          "maxTokens": 65536,
+          "cost": {
+            "input": 0.14,
+            "output": 0.58,
+            "cacheRead": 0.03,
+            "cacheWrite": 0
+          },
+          "compat": {
+            "supportsDeveloperRole": false
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "low",
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max",
+            "max": "max"
+          }
+        }
+      ]
+    }
+  }
+}

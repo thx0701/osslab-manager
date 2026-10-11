@@ -11,6 +11,53 @@ from .artifacts import RelayError, alive
 from .store import Store, TERMINAL
 
 DEFAULT_SKILL = Path.home() / '.agents/skills/osslab-manager'
+LOG_NAMES = ('stdout.log', 'stderr.log')
+
+
+def log_sizes(directory):
+    sizes = []
+    for name in LOG_NAMES:
+        path = directory / name
+        sizes.append(path.stat().st_size if path.is_file() else None)
+    return tuple(sizes)
+
+
+def notice_silence(directory, silence):
+    """Return true after recording one notice for the current log sizes.
+
+    Missing logs are not silence. A later wait with the same sizes does not
+    notice again; growth starts a new episode.
+    """
+    if silence < 0:
+        return False
+    sizes = log_sizes(directory)
+    if all(size is None for size in sizes):
+        return False
+    newest = max((directory / name).stat().st_mtime
+                 for name, size in zip(LOG_NAMES, sizes) if size is not None)
+    if time.time() - newest < silence:
+        return False
+    marker = directory / 'silence-notice.json'
+    if marker.is_file():
+        try:
+            previous = tuple(json.loads(marker.read_text()).get('sizes'))
+        except (OSError, json.JSONDecodeError, TypeError):
+            previous = None
+        if previous == sizes:
+            return False
+    marker.write_text(json.dumps({'sizes': list(sizes)}, ensure_ascii=True) + '\n')
+    return True
+
+
+def question_message(items):
+    lines = []
+    for item in items:
+        q = item['question']
+        lines.append(f"{item['attempt']} qid={item['qid']} kind={q['kind']} where={q['where'][:120]} "
+                     f"deadline={item['deadline']}")
+    return ('Worker question pending (reported once): ' + ' | '.join(lines) +
+            '. Read: osrelay questions --owner <owner>; reply: osrelay answer <attempt> --qid <qid> '
+            '--owner <owner> --text <answer>; then wait again.')
 
 
 def parser():
@@ -35,6 +82,20 @@ def parser():
     sub.add_parser('serve', help='Foreground runner; manage with systemd or Paseo terminal')
     internal = sub.add_parser('_child', help=argparse.SUPPRESS)
     internal.add_argument('attempt'); internal.add_argument('lock_fd', type=int)
+    # v1.3 worker driver channel; not for managers.
+    ask = sub.add_parser('_ask', help=argparse.SUPPRESS)
+    ask.add_argument('ask_action', choices=('post', 'poll', 'expire'))
+    ask.add_argument('attempt')
+    ask.add_argument('--qid', required=True)
+    ask.add_argument('--timeout-ms', type=int)
+    ask.add_argument('--payload', help='JSON object: kind, where, options, recommendation, impact')
+    questions = sub.add_parser('questions', help='Pending worker questions on running attempts')
+    questions.add_argument('--owner')
+    answer = sub.add_parser('answer', help="Answer a worker question; counts as a ticket amendment")
+    answer.add_argument('attempt')
+    answer.add_argument('--qid', required=True)
+    answer.add_argument('--owner', required=True)
+    answer.add_argument('--text', required=True)
     for action in ('status', 'context', 'bind', 'run', 'review', 'verify', 'block', 'unblock', 'handoff', 'recover', 'accept', 'finalize', 'abandon'):
         sp = sub.add_parser(action)
         sp.add_argument('task')
@@ -54,6 +115,8 @@ def parser():
                             help="Continue this task's latest pi session; refused when it cannot be continued")
         if action == 'review':
             sp.add_argument('--prompt', required=True)
+            sp.add_argument('--engine', choices=('grok', 'glm'), default='grok',
+                            help='Review engine; GLM uses the full GLM-5.3 Max read-only helper')
         if action == 'block':
             sp.add_argument('--reason', required=True)
             sp.add_argument('--resume-note', required=True)
@@ -69,7 +132,10 @@ def parser():
             sp.add_argument('--to', required=True)
             sp.add_argument('--key', required=True)
     wait = sub.add_parser('wait', help='Wait for an attempt; timeout does not cancel it')
-    wait.add_argument('attempt'); wait.add_argument('--timeout', type=float, default=30)
+    wait.add_argument('attempt')
+    wait.add_argument('--timeout', type=float, default=30)
+    wait.add_argument('--silence', type=float, default=900,
+                      help='Exit 4 once when stdout.log and stderr.log keep the same size for this many seconds. Does not cancel the attempt. The same sizes are not reported again.')
     cancel = sub.add_parser('cancel')
     cancel.add_argument('attempt'); cancel.add_argument('--owner', required=True); cancel.add_argument('--note', required=True)
     return p
@@ -91,8 +157,12 @@ def execute(store, args, command):
             runner['alive'] = alive(runner['process'])
         except (OSError, ValueError, KeyError):
             runner = {'alive': False}
-        return {'state': str(store.root), 'runner': runner, 'skill': str(DEFAULT_SKILL.resolve()),
-                'routes': [route(DEFAULT_SKILL.resolve(), engine) for engine in ('pi', 'glm', 'grok')]}
+        skill = DEFAULT_SKILL.resolve()
+        routes = [route(skill, engine) for engine in ('pi', 'glm', 'grok')]
+        # Older installed skills still support the default routes; GLM review is optional.
+        if (skill / 'scripts/zcode-readonly-review.sh').is_file():
+            routes.append(route(skill, 'glm', 'review'))
+        return {'state': str(store.root), 'runner': runner, 'skill': str(skill), 'routes': routes}
     if action == 'serve':
         from .runner import serve
         serve(store)
@@ -102,6 +172,22 @@ def execute(store, args, command):
         state = store.root
         store.close()
         return {'child_exit': child(state, args.attempt, args.lock_fd)}
+    if action == '_ask':
+        if args.ask_action == 'post':
+            if args.timeout_ms is None or args.payload is None:
+                raise RelayError('invalid_question', 'post needs --timeout-ms and --payload')
+            try:
+                payload = json.loads(args.payload)
+            except ValueError:
+                raise RelayError('invalid_question', 'payload is not JSON') from None
+            return store.ask(args.attempt, args.qid, args.timeout_ms, payload)
+        if args.ask_action == 'poll':
+            return store.question(args.attempt, args.qid)
+        return store.expire(args.attempt, args.qid)
+    if action == 'questions':
+        return store.questions(args.owner)
+    if action == 'answer':
+        return store.answer(args.attempt, args.qid, args.owner, args.text)
     if action == 'context' and store.is_goal(args.task):
         return store.goal_context(args.task, args.runtime)
     if action in ('status', 'context'):
@@ -148,10 +234,18 @@ def execute(store, args, command):
         deadline = time.monotonic() + max(0, args.timeout)
         while True:
             attempt = store.attempt(args.attempt)
+            fresh = store.notify_questions(args.attempt)
+            if fresh:
+                # Before a terminal result too: the asking worker waits at most until its deadline.
+                raise RelayError('question_pending', question_message(fresh), {'questions': fresh})
             if attempt['status'] in TERMINAL:
                 return attempt
             if time.monotonic() >= deadline:
                 raise RelayError('wait_timeout', f"{args.attempt} remains {attempt['status']}; not canceled")
+            if notice_silence(Path(attempt['directory']), args.silence):
+                raise RelayError('wait_silent',
+                                 f"{args.attempt} produced no new stdout/stderr for {args.silence:g}s; "
+                                 f"still {attempt['status']}; not canceled")
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
     raise RelayError('invalid_action', action)
 
@@ -171,9 +265,18 @@ def main(argv=None):
         value = execute(store, args, command)
         print(json.dumps({'ok': True, 'result': value}, ensure_ascii=True))
     except (RelayError, OSError, ValueError, sqlite3.Error) as exc:
-        print(json.dumps({'ok': False, 'error': {'code': getattr(exc, 'code', 'runtime_error'),
-                                              'message': str(exc)}}, ensure_ascii=True), file=sys.stderr)
-        return 3 if getattr(exc, 'code', None) == 'wait_timeout' else 1
+        error = {'code': getattr(exc, 'code', 'runtime_error'), 'message': str(exc)}
+        if getattr(exc, 'details', None) is not None:
+            error['details'] = exc.details
+        print(json.dumps({'ok': False, 'error': error}, ensure_ascii=True), file=sys.stderr)
+        code = getattr(exc, 'code', None)
+        if code == 'wait_timeout':
+            return 3
+        if code == 'wait_silent':
+            return 4
+        if code == 'question_pending':
+            return 5
+        return 1
     finally:
         if store is not None:
             store.close()

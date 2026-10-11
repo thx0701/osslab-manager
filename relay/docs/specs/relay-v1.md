@@ -14,7 +14,7 @@ OSSLab manager 的經理目前手動保管 pid、log、attempt、回執與交接
 
 1. 經理以 repo、工單、穩定 owner 建立任務，重開 session 後能查到狀態、歷史、回執與下一步。工單 ID 全域唯一，workdir 以真實 Git 根路徑正規化。
 2. run/review/verify 使用明確 idempotency key。相同 key＋相同請求回同一 attempt；相同 key 不同請求拒絕。不同任務不能同時占用同一 worktree。worker 和 review/verify 也不得交錯寫同一 worktree。
-3. 每次 attempt 凍結工單、整份 skill、路由模型資訊與輸入／輸出證據。路由模型以既有 helper 為正本，不另外新增模型呼叫方式。
+3. 每次 attempt 凍結工單、整份 skill、路由模型資訊與輸入／輸出證據。路由模型以 helper 為正本，不另外新增模型呼叫方式。使用者定案擴充 `review --engine grok|glm`，預設 Grok；GLM 審查用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，`run --engine glm` 仍用 GLM-5.3-Flash 工人。路由以 kind 區分，engine 也屬於冪等請求。
 4. 獨立 `serve` 擁有執行生命週期。經理 CLI 退出不影響已排程工作；程序 PID 必須搭配 starttime 與 boot id。完成結果先原子寫檔，daemon 重啟可重新收取；不假裝 OS spawn 與 SQLite 是同一交易。
 5. 啟動後尚未登錄程序就中斷、程序消失且無結果等狀況進 recovery_required，不自動重派。進程仍活著或工作樹鎖仍有人持有時不可 recover。recover 先用既有 helper 建立完整備份，成功後由經理明確選擇繼承現況，再允許新 attempt；不自動 reset/clean/kill。
 6. 工單與 review prompt 不得是 worktree 內未追蹤且未 ignore 的檔（會改變指紋），create／review 拒絕。
@@ -36,6 +36,7 @@ OSSLab manager 的經理目前手動保管 pid、log、attempt、回執與交接
 - task、attempt、events 分離；錯誤有機器可讀 code。wait 在程式內等待，逾時有明確結果，不把等候逾時當成工人失敗。
 - 凍結的 worker 工單以原工單內容加本輪回執路徑傳入；worker 不改動原工單、不挪目錄。保留 helper 全部既有授權／秘密規則。
 - v1 固定從零啟動 worker。v1.2（`relay-v1.2.md`）改為明示 `--resume` 且門檻不過就拒絕；沒帶 `--resume` 仍從零開始。
+- v1.3（`relay-v1.3.md`）新增 pi 工人施工中發問：`wait` 退出 5、`questions`、`answer`。
 - 以既有 evidence-run 指紋契約比對受驗版本；ignored 檔、submodule 內部與外部服務不在指紋內。
 - graceful daemon stop 停止接新單，等待其已啟動的子程序完成；故障重啟只核對／收取，不自動清理或重試。
 - CLI mutations 需匹配任務 owner（同使用者操作契約，不宣稱是惡意程式的權限隔離）。

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# 保留的 OpenRouter 工人。預設派工已改走 pi-runinfra-worker.sh；RunInfra 暫停或額度失敗時改呼叫這支，參數相同。
 set -euo pipefail
 
 usage() {
@@ -38,6 +39,15 @@ for template in "$receipt_template" "$prompt_template"; do
     exit 1
   }
 done
+# pi 由同目錄的 RPC 驅動程式啟動，問經理工具是同目錄的擴充；凍結副本少了任一個就不能派工。
+driver=$skill_dir/scripts/pi-worker-driver.py
+ask_extension=$skill_dir/scripts/pi-ask-manager.ts
+for file in "$driver" "$ask_extension"; do
+  [[ -f "$file" ]] || {
+    printf 'skill file is missing: %s (freeze the whole skill directory, not just one script)\n' "$file" >&2
+    exit 1
+  }
+done
 
 # Credential file is runtime-only and intentionally excluded from static analysis.
 # shellcheck disable=SC1091
@@ -52,6 +62,7 @@ api_key=$OPENROUTER_API_KEY
 unset OPENROUTER_API_KEY
 
 pi_bin=$(command -v pi) || { printf 'pi CLI is unavailable\n' >&2; exit 1; }
+python_bin=$(command -v python3) || { printf 'python3 is unavailable\n' >&2; exit 1; }
 
 # 接續只在：workdir 是 git 工作樹、session 開局之後 HEAD 沒變（還沒提交）、上一輪確實留下 pi session、
 # 且最多接續 2 次；其餘一律從零開始（帶 --require-resume 時改為拒絕）。放在憑證與 CLI 檢查之後，
@@ -115,7 +126,8 @@ prompt=${prompt//'{{ENGINE}}'/"$engine"}
 # 工人以乾淨環境啟動：不繼承呼叫端（經理 session）已匯出的 token 與業務憑證。
 # 只留執行必需的變數；本機磁碟上的 secret 檔仍可讀，隔離的剩餘風險見 SKILL.md。
 # 直接 unset 再 exec，不用 env -i：金鑰只在環境變數裡，不出現在任何程序的 argv。
-keep=" HOME PATH USER LOGNAME LANG TERM TMPDIR XDG_RUNTIME_DIR DOCKER_HOST HTTPS_PROXY HTTP_PROXY NO_PROXY TZ "
+# OSRELAY_* 是 Relay 給驅動程式的問答通道（v1.3）；驅動程式不會把它們傳給 pi。
+keep=" HOME PATH USER LOGNAME LANG TERM TMPDIR XDG_RUNTIME_DIR DOCKER_HOST HTTPS_PROXY HTTP_PROXY NO_PROXY TZ OSRELAY_ATTEMPT OSRELAY_STATE OSRELAY_BIN "
 for name in $(compgen -e); do
   [[ $keep == *" $name "* ]] || unset -v "$name" 2>/dev/null || true
 done
@@ -123,16 +135,19 @@ export USER="${USER:-$(id -un)}" LOGNAME="${LOGNAME:-$(id -un)}" LANG="${LANG:-C
 export OPENROUTER_API_KEY="$api_key"
 unset api_key
 
-# exec 沿用同一個 PID：經理用這行看工人是否還在跑（ps -o etime= -p <pid>）。
+# exec 沿用同一個 PID：起跑行的 pid 是 RPC 驅動程式，pi 是它的子程序；經理用這行看工人是否還在跑
+# （ps -o etime= -p <pid>）。過濾程式不論怎麼死，pi 都會收到 SIGTERM 一起收尾，不會變成孤兒。
 # proc_start 讓 wait-worker.sh 分得出這個 pid 後來是不是被別的程序重用了。
 read -r proc_stat 2>/dev/null </proc/$$/stat || proc_stat=
 read -ra proc_fields <<<"${proc_stat##*) }"
 printf 'pi worker start pid=%s engine=%s ticket=%s%s proc_start=%s at=%s\n' "$$" "$engine" "$ticket" "${chain:+ session=$session_state}" \
   "${proc_fields[19]:-}" "$(TZ=Asia/Taipei date '+%F %T %z')" >&2
 cd "$workdir"
-# 工人只做開發：不載入全域／公司 skill（含通訊與業務系統的）、擴充與 prompt 範本；每一層的 AGENTS.md／CLAUDE.md
+# 工人只做開發：不載入全域／公司 skill（含通訊與業務系統的）、其他擴充與 prompt 範本；每一層的 AGENTS.md／CLAUDE.md
 # 都不自動載入（上層共用規矩可能寫著怎麼載入團隊秘密）。repo 自己的那份改由上面的指示要求工人用 read 讀。
 # 無頭工人不繼承呼叫端的 stdin：開著的 pipe／socket 會讓 CLI 一直等 EOF。
-exec "$pi_bin" -p "${session_args[@]}" --no-skills --no-context-files --no-extensions --no-prompt-templates \
-  --provider openrouter --model deepseek/deepseek-v4.1-flash --thinking high \
-  "$resume_note$prompt" </dev/null
+# RPC 模式：驅動程式把事件濃縮成一行一筆即時寫進 log、照文字模式決定成敗，並轉接 ask_manager 的發問與經理答案。
+# prompt 是驅動程式的參數，由它用 RPC prompt 指令送進 pi；--offline 關掉 RPC 模式啟動時的網路動作（模型目錄刷新）。
+exec "$python_bin" -I "$driver" --prompt "$resume_note$prompt" -- "$pi_bin" --mode rpc --offline "${session_args[@]}" \
+  --no-skills --no-context-files --no-extensions --no-prompt-templates -e "$ask_extension" \
+  --provider openrouter --model deepseek/deepseek-v4.1-flash --thinking high </dev/null

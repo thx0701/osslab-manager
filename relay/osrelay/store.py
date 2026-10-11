@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import uuid
+from datetime import datetime, timedelta
 
 from .artifacts import (RelayError, now, repo_root, snapshot, atomic_json, digest_file,
                         worktree_lock, worktree_tree, route, clean_env, untracked, git)
@@ -44,6 +45,19 @@ SCHEMA_V2 = '''
     body TEXT NOT NULL, at TEXT NOT NULL);
   PRAGMA user_version=2;
 '''
+# v1.3：工人施工中發問。題號 qid 由工人驅動程式給（pi 的 toolCallId 或其雜湊），在同一 attempt 內唯一。
+QUESTIONS_V3 = '''
+  CREATE TABLE IF NOT EXISTS questions (
+    attempt_id TEXT NOT NULL REFERENCES attempts(id), qid TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id), payload TEXT NOT NULL,
+    state TEXT NOT NULL, asked TEXT NOT NULL, deadline TEXT NOT NULL,
+    notified TEXT, answer TEXT, answered_by TEXT, answered_at TEXT, updated TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, qid));
+  CREATE INDEX IF NOT EXISTS questions_by_state ON questions(state);
+  PRAGMA user_version=3;
+'''
+QUESTION_KINDS = ("scope_conflict", "contract_conflict", "ambiguous_ticket")
+MAX_QUESTION_MS = 3600000
 
 
 def encode(value):
@@ -89,12 +103,15 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version > 2:
+        if version > 3:
             raise RelayError("schema_version", f"Unsupported schema {version}")
         if version == 0:
             self.db.executescript(SCHEMA_V2)
         elif version == 1:
             self._upgrade_v1()
+        if version < 3:
+            # A v2 binary refuses user_version 3, so do not roll it back onto this file.
+            self.db.executescript(QUESTIONS_V3)
 
     def _upgrade_v1(self):
         """Add goal/chain columns. A v1 binary refuses user_version 2, so do not roll it back onto this file."""
@@ -214,6 +231,8 @@ class Store:
     def status(self, task_id):
         task = self.task(task_id)
         task["blocked"] = json.loads(task["blocked"]) if task["blocked"] else None
+        task["questions"] = [question_view(row) for row in self.db.execute(
+            "SELECT * FROM questions WHERE task_id=? ORDER BY asked,qid", (task_id,))]
         task["attempts"] = [self.attempt(row[0]) for row in self.db.execute(
             "SELECT id FROM attempts WHERE task_id=? ORDER BY created,id", (task_id,)).fetchall()]
         task["events"] = [dict(row) for row in self.db.execute(
@@ -298,8 +317,8 @@ class Store:
             raise RelayError("invalid_engine", "worker must be pi or glm")
         if resume and (kind != "worker" or engine != "pi"):
             raise RelayError("resume_refused", "Resume is only for the pi worker")
-        if kind == "review" and engine != "grok":
-            raise RelayError("invalid_engine", "routine review uses skill's Grok helper")
+        if kind == "review" and engine not in ("grok", "glm"):
+            raise RelayError("invalid_engine", "review must be grok or glm")
         if kind == "verify" and not command:
             raise RelayError("missing_command", "verify needs -- command arguments")
         if kind == "review" and not prompt:
@@ -334,7 +353,7 @@ class Store:
             directory.mkdir(mode=0o700, parents=True)
             # This is a trusted, explicitly selected installed skill, not downloaded code.
             shutil.copytree(skill, directory / "skill", symlinks=False)
-            info = route(directory / "skill", engine) if kind != "verify" else {"engine": "verify", "helper": "evidence-run.sh"}
+            info = route(directory / "skill", engine, kind) if kind != "verify" else {"engine": "verify", "helper": "evidence-run.sh"}
             ticket = Path(task["ticket"]).read_text()
             (directory / "ticket.original.md").write_text(ticket)
             receipt = directory / "receipt.md"
@@ -551,6 +570,122 @@ class Store:
             self.event(task_id, "abandoned", {"actor": actor, "note": note, "from": task["state"]})
         return self.status(task_id)
 
+    def ask(self, attempt_id, qid, timeout_ms, payload):
+        """Worker driver posts a question; repeating the same qid and payload is idempotent."""
+        qid = valid_qid(qid)
+        if not isinstance(timeout_ms, int) or not 0 < timeout_ms <= MAX_QUESTION_MS:
+            raise RelayError("invalid_question", f"timeout_ms must be 1..{MAX_QUESTION_MS}")
+        payload = valid_question(payload)
+        with self.tx():
+            attempt = self.attempt(attempt_id)
+            if attempt["kind"] != "worker" or attempt["status"] != "running":
+                raise RelayError("attempt_not_running", f"{attempt_id} is {attempt['kind']}/{attempt['status']}")
+            old = self.db.execute("SELECT * FROM questions WHERE attempt_id=? AND qid=?", (attempt_id, qid)).fetchone()
+            if old:
+                if json.loads(old["payload"]) != payload:
+                    raise RelayError("idempotency_conflict", qid)
+                return question_view(old)
+            at = now()
+            deadline = (datetime.fromisoformat(at) + timedelta(milliseconds=timeout_ms)).isoformat(timespec="microseconds")
+            self.db.execute("INSERT INTO questions(attempt_id,qid,task_id,payload,state,asked,deadline,updated) "
+                            "VALUES(?,?,?,?,'pending',?,?,?)",
+                            (attempt_id, qid, attempt["task_id"], encode(payload), at, deadline, at))
+            self.event(attempt["task_id"], "question_asked",
+                       {"qid": qid, "kind": payload["kind"], "where": payload["where"], "deadline": deadline}, attempt_id)
+        return self.question(attempt_id, qid)
+
+    def question(self, attempt_id, qid):
+        """Current state; a pending question past its deadline is recorded as expired first."""
+        with self.tx():
+            row = self._question(attempt_id, qid)
+            if row["state"] == "pending" and past(row["deadline"]):
+                row = self._close_question(row, "expired", {"by": "deadline"})
+        return question_view(row)
+
+    def expire(self, attempt_id, qid):
+        """The worker stopped waiting (pi's own timeout); an answered question stays answered."""
+        with self.tx():
+            row = self._question(attempt_id, qid)
+            if row["state"] == "pending":
+                row = self._close_question(row, "expired", {"by": "worker"})
+        return question_view(row)
+
+    def answer(self, attempt_id, qid, actor, text):
+        required(text, "answer text")
+        refused = False
+        with self.tx():
+            row = self._question(attempt_id, qid)
+            self.task(row["task_id"], actor)
+            running = self.attempt(attempt_id)["status"] == "running"
+            if row["state"] == "pending" and (past(row["deadline"]) or not running):
+                # Record why it closed before refusing; the refusal must not roll this back.
+                row = self._close_question(row, "expired" if running else "withdrawn",
+                                           {"by": "deadline" if running else "attempt_finished"})
+                refused = True
+            elif row["state"] == "pending":
+                at = now()
+                self.db.execute("UPDATE questions SET state='answered',answer=?,answered_by=?,answered_at=?,updated=? "
+                                "WHERE attempt_id=? AND qid=?", (text, actor, at, at, attempt_id, qid))
+                self.event(row["task_id"], "question_answered", {"qid": qid, "owner": actor, "answer": text}, attempt_id)
+                row = self._question(attempt_id, qid)
+            else:
+                refused = True
+        if refused:
+            raise RelayError("question_expired", f"{qid} is {row['state']}; the worker no longer waits for it")
+        return question_view(row)
+
+    def questions(self, owner=None):
+        """Pending questions on running attempts, oldest first, with the full payload."""
+        self._expire_due()
+        sql = ("SELECT q.* FROM questions q JOIN tasks t ON t.id=q.task_id JOIN attempts a ON a.id=q.attempt_id "
+               "WHERE q.state='pending' AND a.status='running'")
+        args = ()
+        if owner is not None:
+            sql += " AND t.owner=?"
+            args = (owner,)
+        return [question_view(row) for row in self.db.execute(sql + " ORDER BY q.asked,q.qid", args)]
+
+    def notify_questions(self, attempt_id):
+        """Pending questions of the same owner not yet reported by any wait; each is reported once."""
+        owner = self.task(self.attempt(attempt_id)["task_id"])["owner"]
+        fresh = []
+        # The filter only spares a write transaction per poll; the UPDATE guard decides between concurrent waits.
+        pending = [item for item in self.questions(owner) if item["notified"] is None]
+        if pending:
+            with self.tx():
+                for item in pending:
+                    if self.db.execute("UPDATE questions SET notified=? WHERE attempt_id=? AND qid=? "
+                                       "AND notified IS NULL AND state='pending'",
+                                       (now(), item["attempt"], item["qid"])).rowcount:
+                        fresh.append(item)
+        return fresh
+
+    def withdraw_questions(self, attempt_id):
+        """Called inside reconcile's transaction when an attempt reaches a terminal status."""
+        for row in self.db.execute("SELECT * FROM questions WHERE attempt_id=? AND state='pending'",
+                                   (attempt_id,)).fetchall():
+            self._close_question(row, "withdrawn", {"by": "attempt_finished"})
+
+    def _question(self, attempt_id, qid):
+        row = self.db.execute("SELECT * FROM questions WHERE attempt_id=? AND qid=?", (attempt_id, qid)).fetchone()
+        if not row:
+            raise RelayError("not_found", f"Question {attempt_id}/{qid}")
+        return row
+
+    def _close_question(self, row, state, body):
+        self.db.execute("UPDATE questions SET state=?,updated=? WHERE attempt_id=? AND qid=? AND state='pending'",
+                        (state, now(), row["attempt_id"], row["qid"]))
+        self.event(row["task_id"], "question_" + state, {"qid": row["qid"], **body}, row["attempt_id"])
+        return self._question(row["attempt_id"], row["qid"])
+
+    def _expire_due(self):
+        if not any(past(row[0]) for row in self.db.execute("SELECT deadline FROM questions WHERE state='pending'")):
+            return
+        with self.tx():
+            for row in self.db.execute("SELECT * FROM questions WHERE state='pending'").fetchall():
+                if past(row["deadline"]):
+                    self._close_question(row, "expired", {"by": "deadline"})
+
     def _assert_resume(self, task):
         """Refuse a resume the helper could not honor; return the session to continue.
 
@@ -638,7 +773,11 @@ def refused_resume(attempt):
 
 
 def receipt_has_doubt(path):
-    """True when section 4 exists and is neither empty nor 無. A receipt without the section is not a doubt."""
+    """True when section 4 exists and says more than 無. A receipt without the section is not a doubt.
+
+    Workers often write 「無。」 or 「- 無」 for the template's 「無」; one bullet and a trailing full stop
+    are tolerated, anything after 無 (「無。但 CDP 未驗」, a second bullet) is still a doubt.
+    """
     if not path.is_file():
         return True
     text = path.read_text()
@@ -649,7 +788,7 @@ def receipt_has_doubt(path):
     nxt = body.find("\n## ")
     if nxt != -1:
         body = body[:nxt]
-    return body.strip() not in ("", "無")
+    return re.sub(r"^[-*]\s*", "", body.strip()).rstrip("。.．").strip() not in ("", "無")
 
 
 def pi_session_exists(session, workdir):
@@ -673,3 +812,37 @@ def outside_fingerprint(workdir, path, label):
     if Path(workdir) in path.parents and untracked(workdir, path):
         raise RelayError("inside_worktree", f"{label} {path} is an untracked, non-ignored file in the worktree; "
                          "keep it outside, git-ignore it, or commit it")
+
+
+def valid_qid(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
+        raise RelayError("invalid_question", f"qid {value!r}")
+    return value
+
+
+def valid_question(payload):
+    """Four fixed fields plus a kind from the three allowed categories."""
+    if not isinstance(payload, dict):
+        raise RelayError("invalid_question", "payload must be a JSON object")
+    if payload.get("kind") not in QUESTION_KINDS:
+        raise RelayError("invalid_question", f"kind must be one of {', '.join(QUESTION_KINDS)}")
+    for key in ("where", "recommendation", "impact"):
+        if not isinstance(payload.get(key), str) or not payload[key].strip():
+            raise RelayError("invalid_question", f"{key} is required")
+    options = payload.get("options")
+    if (not isinstance(options, list) or not 2 <= len(options) <= 3
+            or not all(isinstance(item, str) and item.strip() for item in options)):
+        raise RelayError("invalid_question", "options must be 2-3 non-empty strings")
+    return {key: payload[key] for key in ("kind", "where", "options", "recommendation", "impact")}
+
+
+def past(deadline):
+    return datetime.fromisoformat(now()) >= datetime.fromisoformat(deadline)
+
+
+def question_view(row):
+    item = dict(row)
+    return {"attempt": item["attempt_id"], "task": item["task_id"], "qid": item["qid"], "state": item["state"],
+            "question": json.loads(item["payload"]), "asked": item["asked"], "deadline": item["deadline"],
+            "notified": item["notified"], "answer": item["answer"], "answered_by": item["answered_by"],
+            "answered_at": item["answered_at"]}

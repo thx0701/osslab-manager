@@ -1,12 +1,14 @@
 # T<N>：<簡短標題>
 
-> 派單：<經理：Claude／ZCode／Codex／Cursor> | 工人：<pi 預設或 zcode 備援；實際引擎見 claimed-by>
+> 派單：<經理：Claude Code／Codex> | 工人：<pi 預設、zcode 備援，或使用者指定的 claude haiku；實際引擎見 claimed-by>
 > workdir: <相對專案根目錄的作業目錄；在根目錄就刪掉這行>
 > blocked-by: <前置工單編號，如 T3；沒有寫「無」>
 > chain: <工單鏈名。同一條鏈共用一棵 git worktree；跟進單沿用母鏈名。pi 接續記憶用單號，不用這個名字>
 > git-worktree: <這條鏈的 git worktree 路徑。可同時派的鏈各用一棵>
 > claimed-by: （派出後由經理照 worker.log 起跑行的 engine= @ at= 填寫）
 > review-tier: <高階｜低階；派單時預估，驗收時照實際 diff 重定，只升不降>
+> review-engine: <grok（預設）｜glm（明確指定完整 GLM-5.3 High）；同系審查註明>
+> relay-mother-task: <阻擋修復票填母 task id，施工映射母 task 的新 attempt；其他票刪掉此行>
 > 重派：<無；有就寫次數、時間與原因>
 
 ## 目標

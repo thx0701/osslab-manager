@@ -1,0 +1,4 @@
+# pi 啟動後寫進 agent dir 的執行期檔。正本 models.json 在這裡；
+# 實際 PI_CODING_AGENT_DIR 在 $HOME/.local/state，這兩個不該出現。
+auth.json
+models-store.json

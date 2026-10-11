@@ -17,7 +17,7 @@
    - 同一 session 已啟動的 resume 已達 2 次（canceled 的不算）
    - 工單檔與開 session 那一輪的 `ticket.original.md` 不同
    - HEAD 與開 session 那一輪的 before head 不同（工作樹髒可以）
-   - 最新成功回執的「## 4. 風險與存疑」有內容且不是「無」；沒有這一節不算存疑；回執檔不見算存疑
+   - 最新成功回執的「## 4. 風險與存疑」有內容且不是「無」（容許一個清單符號與結尾句號，如「無。」「- 無」；「無。但 X 未驗」或多一條仍算存疑）；沒有這一節不算存疑；回執檔不見算存疑
    - `~/.local/state/osslab-manager/pi-sessions/<session>-<workdir sha256 前 12 碼>/` 沒有 `*_<session>.jsonl`
 7. 通過時 helper 收到 `--resume <session> --require-resume`：helper 自己的門檻（HEAD、次數、session 檔）不過就以
    exit 3 失敗，不改成從零開始。exit 3 且工作樹未變時，attempt 記 failed（`resume_refused`），task 回到排隊前狀態，不進 recovery_required，也不算入 2 次上限；工作樹有變仍照一般工人失敗處理。凍結工單寫明接續的 session 與「記憶不是證據」。同一 key 重送仍回原 attempt，即使之後已達上限。

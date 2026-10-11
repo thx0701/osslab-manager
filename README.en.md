@@ -1,131 +1,114 @@
-# OSSLab Manager · Strong model as tech lead, flash models as juniors (works with Claude / ZCode / Codex / Cursor)
+# OSSLab Manager · Your strongest model as tech lead, a Flash model as the junior (Claude Code / Codex)
 
 [中文](README.md) | **English**
 
-What you want is a team of a **senior tech lead managing junior engineers**: the lead's judgment and stamina, with the juniors' cost and speed.
+What you want is a **senior tech lead running junior engineers**: the lead's judgment and stamina, at the junior's cost and speed.
 
-This skill is that team. A strong model (Opus 5.5+ / GPT-6 Astra) is the **tech lead**: it takes stock of the repo, splits the work into tickets, and defines acceptance. It writes no implementation code, so all of its budget goes into judgment. Cheap, fast flash-tier models are the **junior engineers** who write the code. A model from another vendor does a read-only external code review; the tech lead checks each finding, re-runs every acceptance command itself, and commits ticket by ticket.
+This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the **tech lead**: it inventories the repo, splits the goal into tickets and defines acceptance — and writes no implementation code, so every unit of its quota goes into judgment. A cheap, fast Flash-tier model is the **junior engineer** who writes the code, and can ask the lead mid-task when it hits a scope or contract conflict. A model from another vendor reviews read-only; the lead verifies every finding, re-runs every acceptance command itself, and commits ticket by ticket.
 
-**Senior judgment, junior cost.** However big the goal, the tokens spent on implementation are DeepSeek Flash tokens, not your Opus subscription.
+**Senior judgment, junior cost** — however big the goal, what burns is DeepSeek Flash, not your Opus subscription.
 
-## Why this version: pin the goal down, then break it up
+## Support matrix
 
-The first version's problem was not a weak model. It was **one session carrying every responsibility**: aligning requirements, taking stock, dispatching, waiting, accepting, reviewing, and committing all lived in one context. Judgment got muddier toward the end, and when the session dropped, the dispatched workers and the acceptance progress dropped with it.
-
-This version borrows two ideas from [OpenRig](https://github.com/mvschwarz/openrig) — **durable roles** and **explicit handoffs** — and splits the work into two layers:
-
-1. **Settle the goal before splitting it.** The spec segment does one thing: agree with you on what to do, what not to do, and what counts as done, written as a confirmation checklist. If "what not to do" can't be written, the scope isn't settled and nothing is dispatched. Only then is the goal split into tickets and ticket chains (one chain shares one git worktree; only independent chains run in parallel).
-2. **Judgment stays in the skill; execution goes to a ledger.** The tech lead only judges (splitting, acceptance, verifying findings, committing). Dispatch, waiting, recovery, and handoff go to [Relay](https://github.com/thx0701/osslab-manager/tree/main/relay) (`osrelay`), a local CLI that records every ticket, attempt, and evidence fingerprint in SQLite. Workers outlive the tech lead; a new session picks up with `context` instead of memory. `accept` checks in code that the latest run of every command verified on the ticket succeeded, the latest review succeeded (or a low-tier waiver was given with a reason), and all of it matches the current Git version with untampered evidence — it does not judge whether the commands were the right ones. `finalize` checks that your commit is exactly the accepted tree, is HEAD, leaves a clean worktree and index, and is a single-parent child of the accepted base (with no change, the original HEAD may close it).
-
-So sessions are split by responsibility — **spec → build → acceptance** — and each segment ends with a ~2KB handoff that the next one starts from (see "Three-segment sessions" below).
-
-### Do you need Paseo?
-
-**No, but it's recommended.** Three layers:
-
-- **Skill**: works on any host; without Relay the tech lead dispatches with the helpers in `scripts/`.
-- **Relay**: on any Linux host with `osrelay` installed, a Claude Code or Codex tech lead goes through Relay (in Paseo or a plain terminal). ZCode / Cursor can dispatch too, but `bind` only records codex / claude.
-- **Paseo**: adds one thing — automatic segment hand-over.
-
-What [Paseo](https://github.com/getpaseo/paseo) adds is **automatic segment hand-over**: when you have set a persistent goal (a goal, "run it to the end", Codex `/goal`), the tech lead ends a segment by opening the next session itself through Paseo's `create_agent`. Without Paseo it stops and gives you an opening prompt to paste into a new session. Long ticket chains that span several segments save the most hands with Paseo.
-
-## Three things to give with a goal
-
-The goal stops at the tech lead; below it, every ticket is a contract with acceptance commands and expected output. For the tech lead to take the goal on, state three things:
-
-1. **Boundary**: what is out of scope. The goal is the authorization scope; a goal without boundaries authorizes too much.
-2. **Success signal**: what you will observe when it's done. This is the tech lead's acceptance anchor; you don't write the commands yourself.
-3. **Authoritative contract**: which spec or document is the source of truth for decisions. Settled decisions are reused, not asked again.
-
-Example: "Bring the FB Marketplace listing flow up to full spec coverage. Payments and shipping are out of scope. When done, every item shows its matching specs and status in the shop. Source of truth: `docs/listing-spec.md`."
-
-For undecided business rules (money, permissions, penalty terms…) the tech lead comes back and asks you, one question at a time. That isn't friction: it's the pipeline stopping the AI from inventing business rules.
-
-## What we've seen in practice
-
-- **The cost structure flips**: implementation runs on pay-per-token flash-tier juniors (same-ticket comparison: DeepSeek Flash was about 7× faster than GLM-5.3-Flash on small tickets). The tech lead's budget goes only to stocktaking, splitting, acceptance, and verification. Multiple tickets can run in parallel in separate worktrees.
-- **More accurate than a single agent**: every ticket passes three independent checks: acceptance commands re-run by the tech lead, out-of-family review, and finding-by-finding verification. A single agent reviews its own work with the same blind spots. The pipeline also forces "what counts as done" to be written as commands, which removes a whole class of ambiguity.
-- **The only cost is time**: a medium ticket takes about 1.5 hours from dispatch to the end of three review rounds, so it's not for urgent work. Everything else is cheap. Well worth it.
-
-### Case study: browser-workflow (browser leasing and manual takeover)
-
-28 files, +5,091 lines; 4 tickets (T1 plus 3 fix tickets) and 3 Grok review rounds in about 1.5 hours. It ended with 60 passing tests, squashed into one commit.
-
-- The junior's own 57 tests were all green, yet the first review found 8 valid issues. The tech lead also wrote repro scripts and caught a hanging lease renewal and grandchild processes left behind after the parent exited.
-- The second round caught 2 more blocking issues: the production wrapper could be bypassed without sending a signal, and the write and read formats disagreed, corrupting state on restart. Before the fix all 3 invalid inputs were accepted and restart returned `corrupt_state`; after the fix all were rejected and restart was clean.
-- Only after a clean third round was it committed.
-
-These are "tests green but actually wrong" defects, the kind a model reviewing its own code rarely catches.
-
-## Recommended setup (harness and models)
-
-| Role | Recommendation | Notes |
+| Role | Supported | Notes |
 |---|---|---|
-| Tech lead harness | Any of Claude Code / Codex / ZCode / Cursor | All four runtimes share the same skill |
-| Tech lead model (subscription) | Claude **Opus 5.5 or later** (reasoning **high or above**), or **GPT-6 Astra** (always **medium**: measured about 3× faster per step than xhigh) | The lead's value is all judgment (splitting, acceptance, verification); don't skimp here |
-| Junior engineer | **DeepSeek 4.1 Flash** (pi headless, pay per token) | Cheap and fast; this is the one |
-| External review | **Grok** or **GLM** both work | Review quality is similar; pick one from a different vendor than the lead and the juniors |
+| Tech lead (manager) | **Claude Code**, **Codex** | Only these two. Claude: Opus 5.5 or later, thinking high or above. Codex: GPT-6 Astra at a fixed **medium** (measured about 3× faster per step than xhigh) |
+| Junior (default) | headless pi CLI + **DeepSeek v4.1 Flash** via RunInfra (pay per token) | `scripts/pi-runinfra-worker.sh` |
+| Junior (same model, fallback provider) | Same, via OpenRouter | When RunInfra is paused or rate/quota limited: `scripts/pi-openrouter-worker.sh` |
+| Junior (backup) | ZCode CLI + GLM-5.3-Flash (BigModel Coding Plan) | When DeepSeek fails acceptance for what looks like model capability: `scripts/zcode-cloud-worker.sh` |
+| Junior (only when asked) | headless Claude Code + claude-haiku-5-5 (local subscription) | Manual dispatch only, not routed by Relay: `scripts/claude-haiku-worker.sh` |
+| External review | **Grok 4.7** medium (default); **GLM-5.3** High on request | Read-only Read/Grep: `scripts/grok-readonly-review.sh`, `scripts/zcode-readonly-review.sh` |
 
-## Three roles
+Cursor and ZCode do not act as tech lead: waiting, handoff and mid-task questions are verified only on Claude Code and Codex.
 
-(Inside SKILL.md the tech lead is called 經理 "manager" and the junior 工人 "worker": same roles, plainer words here.)
+## How it works
 
-| Role | Runs as | Invocation |
-|---|---|---|
-| Tech lead | Claude Code / ZCode / Codex (GPT-6 Astra) / Cursor with this skill loaded | — |
-| Junior (default) | pi CLI in headless mode; `deepseek/deepseek-v4.1-flash` via OpenRouter (pay per token) | `scripts/pi-openrouter-worker.sh <workdir> <ticket>` |
-| Junior (fallback) | ZCode CLI in headless mode; `GLM-5.3-Flash` (BigModel Coding Plan) | `scripts/zcode-cloud-worker.sh <workdir> <ticket>` |
-| External review | Grok Build `grok-4.7` (medium), read-only Read / Grep; GLM also possible | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
+A goal → **inventory** (measure first, then ask; a gap table lets you pick the scope) → **decision readiness** (settled / observed / open; open questions come back to you) → **tickets** (one thing each, `blocked-by` dependencies, acceptance written as commands with expected output) → **dispatch** (clean environment, frozen helpers) → **lead acceptance** (a receipt is only the junior's claim; the lead re-runs the commands) → **out-of-family review** → **finding-by-finding verification** → **local commit per ticket** → batch code review before push → PR.
+
+**Judgment lives in the skill, execution in a ledger.** Dispatch, waiting, recovery and handoff go to [Relay](https://github.com/thx0701/osslab-manager/tree/main/relay) (`osrelay`): a local CLI that records every ticket, attempt, question and evidence fingerprint in SQLite. Juniors outlive the lead's session; a new lead session takes over with `context`, not memory. `accept` checks in code that the latest run of every verification command passed on the current Git version, the review succeeded, and no evidence file was swapped; `finalize` checks that your commit is exactly the accepted tree.
+
+New in this version:
+
+- **Live progress**: every junior tool start/end, model reply and retry is written to the log as it happens (`bash: npm test`, `bash 完成 20.0s`). Relay's 900-second silence alarm now fires only when something is really stuck, and the last log line shows which command.
+- **Ask the lead mid-task**: when a junior hits a scope or contract conflict ("the ticket only allows file A, but acceptance also needs B"), it calls `ask_manager` and pauses (four fixed fields: where it is stuck, options, recommendation, impact if unanswered; at most 3 per run). The lead's `osrelay wait` returns exit code 5 with the question; after `osrelay answer`, the junior continues in the same run. With no answer in 12 minutes it stops the affected part and records it in the receipt, as before. Answers count as ticket amendments in acceptance and review.
+
+## Recent changes (2026-10)
+
+- **pi juniors now run through an RPC driver**: `scripts/pi-worker-driver.py` starts pi with `pi --mode rpc`, replacing the `-p` text mode that printed nothing until the run ended. The driver writes live progress, relays questions, and decides success the way text mode did (pi itself still exits 0 on a model error; the driver turns that into exit 1). Signal forwarding, pi exiting when its parent dies, and Relay's worktree lock are unchanged.
+- **`osrelay wait` exit codes**: 0 the query succeeded (check `result.status` for the outcome), 3 wait timeout (the work keeps running), 4 logs silent for 900 seconds, 5 a question is waiting. Both 4 and 5 are reported once: 4 once per set of log sizes, 5 once per question; 5 is reported before any other result.
+- **Reading and answering**: `osrelay questions --owner <owner>` lists open questions in full; `osrelay answer <attempt> --qid <qid> --owner <owner> --text …` replies. Each question is reported once, so a lead that chooses not to answer lets it expire after 12 minutes instead of being woken by every `wait`.
+- **Receipts gain "## 5. 問答" (Q&A)**: the junior lists each question, the lead's reply (or "no manager channel" / "no reply received"), and what it did. Answered questions go here, not in section 4 (risks and doubts), so they do not block the next `--resume`.
+- **"無。" no longer blocks resume**: when Relay checks section 4 of a receipt for doubts, "無" ("none") with one list marker or a trailing full stop ("無。", "- 無") counts as no doubt; "無。但 X 未驗" ("none, but X unverified") or an extra bullet is still a doubt.
 
 ## Quick start
 
-1. Put this repo in your agent skill directory (for example `~/.agents/skills/osslab-manager/`; each runtime's view mounts the same source).
-2. Prepare two secret files (keys never go into argv, logs, or git):
-   - `~/.openclaw/secrets/openrouter.env`: `OPENROUTER_API_KEY=...`
-   - `~/.openclaw/secrets/glm-coding-plan.env`: `ZHIPU_API_KEY=...`
-   - Override the ZCode CLI location with `ZCODE_CLI_BIN`.
-3. Install the `pi` and `zcode` CLIs locally; reviews use `grok` (or a GLM-style read-only reviewer).
-4. (Recommended) Install Relay: `cd relay && python3 deploy/install-user.py`, then enable `osrelay.service` as described in [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md). The tech lead then dispatches through Relay per [docs/relay.md](docs/relay.md).
-5. In chat, say 托管 / 走工單 / 派出去 (delegate / run tickets / dispatch) or `osslab-manager`, give a goal with the three things above, and the tech lead follows the skill.
+1. Put this repo at `~/.agents/skills/osslab-manager/` (Codex scans it directly; Claude Code mounts the same copy through a symlink).
+2. Create the secret files (keys travel only in environment variables, never argv/logs/git; change the paths at the top of `scripts/`):
+   - `~/.openclaw/secrets/glm-5.3-flash.env`: `GLM_53_FLASH_API_KEY=...` (RunInfra, default junior)
+   - `~/.openclaw/secrets/openrouter.env`: `OPENROUTER_API_KEY=...` (OpenRouter fallback)
+   - `~/.openclaw/secrets/glm-coding-plan.env`: `ZHIPU_API_KEY=...` (GLM backup and GLM review)
+3. Install `pi` (0.99 or later, RPC mode) and `python3`; `grok` for review; `zcode` for the GLM backup and review (override its path with `ZCODE_CLI_BIN`).
+4. Install Relay: `cd relay && python3 deploy/install-user.py`, then enable `osrelay.service` per [relay/docs/paseo.md](https://github.com/thx0701/osslab-manager/blob/main/relay/docs/paseo.md). Mid-task questions exist only under Relay; without it the lead dispatches by hand per `docs/manual-dispatch.md`, and a junior that asks gets "no manager channel" immediately.
+5. In Claude Code or Codex, say "托管" / "走工單" / "派出去" (or ask it to use osslab-manager) and give a goal with the three essentials.
 
-## Flow
+## The three essentials of a goal
 
-A goal (three things) → stocktake (measure before asking; a gap table lets you choose scope) → decision readiness (settled / observed / undecided; undecided goes back to you) → ticketing (one thing per ticket, full `blocked-by` dependencies, acceptance written as commands with expected output, a predicted `review-tier`) → dispatch (clean environment, optional frozen helpers, a recovery procedure for dead tickets) → tech lead acceptance (a receipt is only the junior's claim; the lead re-runs the commands) → out-of-family review (Grok for high-tier tickets, skipped for low-tier) → finding-by-finding verification (reviewers are often wrong) → local commit per ticket (blocking findings can't be deferred to another ticket; verified small nits may be fixed by the lead directly) → a batch code review before push → PR.
+1. **Boundary**: what is out of scope. A goal is a grant of authority; one without a boundary grants too much.
+2. **Success signal**: what you will observe when it is done. This is the lead's acceptance anchor; you do not write the commands.
+3. **Authoritative contract**: which spec or document is the source of truth. Settled decisions are reused, not re-asked.
 
-Tickets live in `_tickets/open|doing|done/` (the directory is the status), receipts in `_receipts/`, run records in `~/.local/state/osslab-manager/`.
+Open business rules (money, permissions, penalties…) come back to you one at a time — that is not friction, it is the pipeline stopping "AI invents a business rule". One-page operator guide: [docs/operator-guide.md](docs/operator-guide.md).
 
-## Three-segment sessions
+## Field results
 
-The tech lead splits work by responsibility instead of cramming it into one session: a **spec segment** (align, take stock, split tickets, post the confirmation checklist), a **build segment** (dispatch juniors, collect receipts), and an **acceptance segment** (re-run acceptance, review, verify findings, commit). Each segment ends with a handoff of about 2KB under `~/.local/state/osslab-manager/handoffs/`, and the next segment starts from that file alone. Low-tier tickets may be accepted in the build session, and fix-up tickets stay in the acceptance segment; a segment that has run about 3 hours (or passes about 60% context, when reported) also switches. On Paseo, if you already set a goal (or Codex `/goal`), the lead opens the next segment itself; otherwise it stops and gives you a prompt to paste. See SKILL.md section 九. An operator one-pager (in Chinese) is at [docs/operator-guide.md](docs/operator-guide.md).
+- **Speed and scale**: 167 pi junior runs through Relay between 2026-09-28 and 10-10 finished in a median 8 minutes, 90% within 25; one Codex (GPT-6 Astra) lead session dispatched 80 tickets over 14 hours.
+- **Silence alarms became meaningful**: before live progress, that lead session received 20 silence alarms and all 20 tickets finished normally — every one a false alarm. Replaying pi session timestamps, the new version predicts 0 false alarms for that batch; across 43 long runs only 2 would fire, both real anomalies (a junior running `find /` or `grep -r` over the whole disk for 18 minutes).
+- **Mid-task questions**: in a live smoke test the junior asked a contract-conflict question with evidence and three options; after the lead answered, it received the answer within 15 seconds, finished, and recorded the exchange in its receipt.
+- **More accurate than solo development**: every ticket passes three independent checks — re-run acceptance, out-of-family review, finding-by-finding verification. A model reviewing its own work shares its own blind spots.
+- **The only cost is time**: a mid-sized ticket takes about 1.5 hours from dispatch to the end of three review rounds; not for emergencies.
+
+### Case: browser-workflow (browser leasing with human takeover)
+
+28 files, +5,091 lines; 4 tickets (T1 plus 3 fix tickets), 3 Grok review rounds, about 1.5 hours, ending with 60 passing tests in one commit. The junior's own 57 tests were all green, yet round one found 8 valid issues (lease renewal could hang; grandchildren survived the parent); round two caught a bypassable production wrapper and a read/write format mismatch that corrupted state on restart; round three was clean. All of these are "tests green, behavior wrong" defects.
+
+## Three-stage sessions
+
+The lead switches sessions by responsibility: **spec** (align, inventory, split tickets, post the checklist) → **build** (dispatch juniors, collect receipts, answer questions) → **acceptance** (re-run acceptance, review, verify, commit). Each stage ends with a ~2KB handoff in `~/.local/state/osslab-manager/handoffs/`, and the next stage starts from that alone; a stage also switches after about 3 hours or ~60% context. Details in SKILL.md section 9.
+
+### Optional: automatic stage handoff with Paseo
+
+Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does not depend on it. With it, when you set a persistent goal (goal, Codex `/goal`), the lead opens the next stage itself with Paseo's `create_agent` at the end of each stage; our environment uses it for stage handoffs.
 
 ## When not to use it
 
-- One-line fixes or copy changes: just do them; don't pay the ticketing overhead (the skill itself says so: work normally unless asked to delegate).
-- Exploratory spikes: if you can't yet say what "done" looks like, you can't write acceptance.
-- Decision-heavy work: if every ticket needs a human call, the tech lead is just a relay. Settle the decisions first, then enter the pipeline.
+- One-line fixes or copy edits — just do them; don't pay the ticket overhead.
+- Exploratory spikes: if you cannot say what "done" looks like, you cannot write acceptance.
+- Decision-dense work: if every ticket needs a human call, the lead is just a relay — settle it first.
 
 ## Safety boundaries
 
-- Juniors start in a **clean environment** (they don't inherit the tech lead session's tokens or business credentials); keys travel only in environment variables, never argv, logs, or git. The pi junior also starts minimal: no skills or extensions, and no AGENTS.md is auto-loaded at any level; its instructions tell it to read the repo's own rules.
-- The reviewer is **read-only** (Read / Grep, MCP tools denied) and may not edit files.
-- Implementation goes only through the helper CLIs; host subagents (Claude Task / Codex subagents / Cursor Task) are banned, because they run inside the tech lead's process and bypass the whole isolation design.
+- Juniors start in a **clean environment** without the lead session's tokens or business credentials; pi juniors also start lean — no skills, no other extensions, no AGENTS.md at any level — and are told to read the repo's own rules.
+- Answers to mid-task questions reach the junior only through pi's RPC stdin; the write end is never inherited and Relay's channel variables never reach pi, so a junior cannot answer itself. Irreversible actions, production and secrets may not be asked about, and stay forbidden even if the lead answers.
+- Reviewers are **read-only** (Read/Grep) and may not edit files.
+- Implementation goes only through the helper CLIs; host subagents (Claude Agent/Task, Codex subagents) are banned — they run inside the lead's process and bypass the whole isolation design.
+- Isolation is an operating contract under one OS user, not a permission sandbox: juniors still run a local shell. Tickets carry no secrets, and production checks are done by the lead.
 
 ## Differences from upstream (yanauto/opus-manager)
 
-- Worker routing is preset (no per-task discovery): DeepSeek by default, GLM as fallback, Grok for read-only review
-- Works across four runtimes: all dispatch in the background; Claude Code and ZCode wait for completion notices, Codex uses managed sessions with a code-mode loop, Cursor waits in the foreground with `wait-worker.sh`
-- Measure before asking: stocktaking produces a gap table and a human picks the scope; in ticketing, humans own scope and the tech lead owns granularity
-- Tickets have a `blocked-by` dependency field; only unblocked tickets are dispatched; separate worktrees run separate chains in parallel
-- Review tiers (`review-tier`): anything touching assertions / guards / money or permissions is high tier; tiers only go up, never down
-- Tech lead direct fixes: verified, non-blocking small nits may be fixed directly (≤10 lines, no behavior change); copy that only restates existing behavior (README, verification reports) may be edited directly up to about 20 lines, but never receipts or specs; all valid findings from one review round go into a single fix ticket instead of one ticket per finding (blocking findings still go to a junior)
-- Recovery for tickets stuck in `doing`: PID-reuse check, half-finished changes saved as a patch, re-dispatches recorded on the same ticket
-- Commit gate: each ticket must pass acceptance, verification, and review verification before commit; valid blocking findings can't be deferred to another ticket
-- Helpers keep keys out of argv, start workers in a clean environment, and connect stdin to /dev/null
-- Team timestamps use Taiwan time (+0800)
+- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, Grok read-only review; Claude Haiku only by explicit manual dispatch
+- Relay ledger: dispatch, waiting, recovery, handoff, acceptance and commit checks with programmatic evidence fingerprints
+- Live progress and mid-task questions (pi RPC driver + `ask_manager` extension)
+- Measure first, then ask: inventory produces a gap table; humans own scope, the lead owns granularity
+- `blocked-by` dependencies; independent chains run in parallel on separate worktrees
+- Review tiers (`review-tier`): anything touching assertions, guards, money or permissions is high tier; tiers only go up
+- Lead hotfix: verified non-blocking nits may be fixed directly; blocking findings still go to a junior
+- Dead-ticket recovery: PID-reuse checks, partial changes backed up first, re-dispatch recorded on the same ticket
+- Three-stage sessions with 2KB handoffs
+- Team timestamps in Taiwan time (+0800)
 
-## Environment assumptions
+## Environment
 
-Relay (`relay/`) needs Linux, Python 3.11+, and Git, and uses only the standard library; run its runner as a systemd user service. The `develop → implement → verify-change → code-review` chain and `to-tickets` mentioned in SKILL.md are our internal set of companion skills; external users can swap in their own development flow, and the same goes for alignment tools such as grill / to-spec. Key paths and model routing are set in the first few lines of each script under `scripts/`.
+Relay needs Linux, Python 3.11+ and Git, standard library only; run the runner as a systemd user service. The `develop → implement → verify-change → code-review` and `to-tickets` chain mentioned in SKILL.md is our internal companion skill set; substitute your own development flow. Change key paths and model routing at the top of `scripts/`.
 
 ## License
 

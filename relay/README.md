@@ -21,23 +21,28 @@ osrelay run ticket-001 --owner project-manager --key implementation-2 --resume
 osrelay context goal-001 --runtime codex
 # 從上一個 JSON result.id 取得 attempt ID
 osrelay wait attempt-... --timeout 30
+# 退出 5：工人在施工中發問；讀題後回答，再回去等
+osrelay questions --owner project-manager
+osrelay answer attempt-... --qid <qid> --owner project-manager --text '准許改 tests/x.py'
 osrelay context ticket-001 --runtime codex
 ```
 
 所有輸出是 JSON。退出碼 0 表示 CLI 操作成功，**不是任務驗收通過**；例如 `wait`
-成功傳回 `failed` attempt 仍退出 0。退出碼 3 是等候逾時，工作繼續；一般執行錯誤退出 1，命令列用法錯誤退出 2。
+成功傳回 `failed` attempt 仍退出 0。退出碼 3 是等候逾時，工作繼續；4 是日誌靜默 900 秒（只通知一次）；5 是同一 owner 的工人在發問（每題只通知一次）；一般執行錯誤退出 1，命令列用法錯誤退出 2。
 查看 `result.status`、`result.state` 與錯誤 `error.code` 判斷下一步。
 
 ## 模型與驗收
 
 每次 attempt 複製整份 skill，記錄 helper hash、工單、route、程序身份、stdout/stderr 與結果。
 工人預設 pi／DeepSeek v4.1 Flash high；經理可明確指定 `--engine glm` 使用 skill 的 GLM-5.3-Flash。
-日常 `review` 仍由 Grok 4.7 medium 執行。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。
+日常 `review` 仍由 Grok 4.7 medium 執行；明確 `review --engine glm` 使用完整 GLM-5.3 Max 的 ZCode 唯讀 helper，與 GLM-5.3-Flash 工人分開路由。實際值以凍結 helper 為正本，Relay 不自行改模型或 fallback。
 本專案交付的外部審查另由使用者指定 GLM-5.3。
 
 ```sh
 osrelay verify ticket-001 --owner project-manager --key verification-1 -- make test
 osrelay review ticket-001 --owner project-manager --key review-1 --prompt /path/to/review-prompt.md
+# 使用者指定完整 GLM-5.3 Max 審查時
+osrelay review ticket-001 --owner project-manager --key review-glm-1 --engine glm --prompt /path/to/review-prompt.md
 # 等待各 attempt 結束、逐條閱讀並核實證據後
 osrelay accept ticket-001 --owner project-manager --note '已核實驗證與審查，逐項符合工單'
 # accept 通過 state=accepted，保留 worktree 占用；經理自行 commit 後再 finalize
@@ -61,6 +66,10 @@ accepted base 的直接單親子提交；沒有 diff 的驗收允許在原 HEAD 
 `create`／`review` 會以 `inside_worktree` 拒絕。經理自己的審查報告副本、核實筆記同樣放 worktree 外。
 review 有非空報告不代表「沒有問題」；經理仍須判斷 findings、測試 oracle 和業務驗收。
 ignored 檔、submodule 內部及外部服務不在指紋中，不能用它們假裝涵蓋所有環境。
+
+先在沒有進行中 attempt 時，逐檔 `git add -N -- <允許的新增檔>`，再 enqueue verify／review；驗證後才改 index 會使證據過期。修復後重跑每條 verify 與 review 都用新 key，原 key 僅重送同一請求。
+
+阻擋修復保留修復票，把其需求與驗收全文附到母 task 的工單來源（worktree 外），以母 task 的新 `run` attempt 施工，不帶 `--resume`、不另建同 worktree task。母 task 全部曾驗過的不同命令與 review 重跑通過，母票和修復同一 commit，再 finalize；獨立跟進 task 等占用釋放後才施工。
 
 ## 中斷與交接
 
@@ -87,7 +96,7 @@ owner 是穩定角色；Paseo session ID 另以 `bind` 記錄。相同請求重�
 ## 開發
 
 `make test` 執行真 Git／SQLite／程序的 CLI regression；模型使用離線 fixture。
-`make check` 檢查編譯與 diff。規格見 [spec](docs/specs/relay-v1.md)。
+`make check` 檢查編譯與 diff。規格見 [spec](docs/specs/relay-v1.md)，驗證見 [verification](docs/verification.md)。
 
 設計參考 [OpenRig](https://github.com/mvschwarz/openrig) 的持久角色與交接概念；本專案是獨立實作。
 最大項、鏈與有條件 `--resume` 的契約見 [v1.2](docs/specs/relay-v1.2.md)。
