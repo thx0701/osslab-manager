@@ -75,4 +75,4 @@ DeepSeek 自己三輪之間，最慢一輪比最快一輪多花 19～51% 的時�
 
 ## 目前的安排
 
-DeepSeek（RunInfra）是預設工人，RunInfra 暫停或額度問題時改走 OpenRouter 的同一顆模型，模型能力不夠再換 GLM 備援；Claude Haiku 只在使用者指定時手動派工，不進 Relay。
+DeepSeek（RunInfra）是預設工人，RunInfra 不能用（暫停、額度等）或模型能力不夠，就換 GLM-5.3-Flash 備援；OpenRouter 的同一顆模型只在使用者指定時用；Claude Haiku 只在使用者指定時手動派工，不進 Relay。

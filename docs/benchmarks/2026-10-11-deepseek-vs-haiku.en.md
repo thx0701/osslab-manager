@@ -75,4 +75,4 @@ Every run passed its verification commands. **That is not enough to compare qual
 
 ## Current routing
 
-DeepSeek on RunInfra is the default junior; if RunInfra is paused or rate/quota limited, the same model via OpenRouter; if the model lacks capability, the GLM backup. Claude Haiku is dispatched by hand only when the user asks, and is not routed by Relay.
+DeepSeek on RunInfra is the default junior; when RunInfra cannot be used (paused, quota) or the model lacks capability, the GLM-5.3-Flash backup. The same model via OpenRouter only when the user asks. Claude Haiku is dispatched by hand only when the user asks, and is not routed by Relay.

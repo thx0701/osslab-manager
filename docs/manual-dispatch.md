@@ -11,7 +11,7 @@ mkdir -p "$D" || exit $?
 A=$(mktemp -d "$D/attempt-XXXXXXXX") || exit $?
 printf 'attempt=%s\n' "$A"
 L="$A/worker.log"
-# 預設 RunInfra DeepSeek。RunInfra 暫停或額度失敗改 pi-openrouter-worker.sh；模型能力不夠再換成 zcode-cloud-worker.sh（參數相同）
+# 預設 RunInfra DeepSeek。RunInfra 不能用或模型能力不夠，改 zcode-cloud-worker.sh（GLM-5.3-Flash，參數相同）；pi-openrouter-worker.sh 只在使用者指定時用
 rc=0; bash ~/.agents/skills/osslab-manager/scripts/pi-runinfra-worker.sh --resume <接續鍵> <workdir> <workdir>/_tickets/doing/<工單>.md \
   > "$L" 2>&1 || rc=$?
 printf '\nhelper exit=%s\n' "$rc" >> "$L"; exit "$rc"

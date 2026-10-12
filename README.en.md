@@ -14,7 +14,7 @@ This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the 
 |---|---|---|
 | Tech lead (manager) | **Claude Code**, **Codex** | Only these two. Claude: Opus 5.5 or later, thinking high or above. Codex: GPT-6 Astra at a fixed **medium** (measured about 3× faster per step than xhigh) |
 | Junior (default) | headless pi CLI + **DeepSeek v4.1 Flash** via **RunInfra** (pay per token; not OpenRouter and not DeepSeek's own API — see the note below) | `scripts/pi-runinfra-worker.sh` |
-| Junior (same model, fallback provider) | Same, via OpenRouter | When RunInfra is paused or rate/quota limited: `scripts/pi-openrouter-worker.sh` |
+| Junior (same model, on request) | Same, via OpenRouter | Not an automatic fallback; only when the user asks: `scripts/pi-openrouter-worker.sh` |
 | Junior (backup) | ZCode CLI + GLM-5.3-Flash (BigModel Coding Plan) | When DeepSeek fails acceptance for what looks like model capability: `scripts/zcode-cloud-worker.sh` |
 | Junior (only when asked) | headless Claude Code + claude-haiku-5-5 (local subscription) | Manual dispatch only, not routed by Relay: `scripts/claude-haiku-worker.sh` |
 | External review | In order: **Codex** GPT-6 Astra medium → **GLM-5.3** max → **Grok 4.7** medium (subscription ended); any can be requested | Read-only: Codex runs in its read-only sandbox, GLM and Grok get Read/Grep only; `scripts/codex-readonly-review.sh`, `scripts/zcode-readonly-review.sh`, `scripts/grok-readonly-review.sh` |
@@ -99,7 +99,7 @@ Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does 
 
 ## Differences from upstream (yanauto/opus-manager)
 
-- Pre-set worker routing: DeepSeek (RunInfra) default, OpenRouter fallback, GLM backup, read-only review in the order Codex → GLM → Grok; Claude Haiku only by explicit manual dispatch
+- Pre-set worker routing: DeepSeek (RunInfra) default, GLM-5.3-Flash backup whenever it cannot be used (OpenRouter only on request), read-only review in the order Codex → GLM → Grok; Claude Haiku only by explicit manual dispatch
 - Relay ledger: dispatch, waiting, recovery, handoff, acceptance and commit checks with programmatic evidence fingerprints
 - Live progress and mid-task questions (pi RPC driver + `ask_manager` extension)
 - Measure first, then ask: inventory produces a gap table; humans own scope, the lead owns granularity
