@@ -42,6 +42,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 - **Codex 技術長改用 5 分鐘 sleep**：原生 `sleep` 5 分鐘，醒來用 `osrelay wait --owner <owner> --timeout 0` 一次查完同 owner 所有鏈；有事件時叫醒會提前結束 sleep，叫醒壞了 sleep 仍保底。起因是 1 秒 yield 輪詢讓等待佔了 token 四到五成。
 - **`osrelay wait --owner`**：一次看同 owner 所有 attempt，回報還沒回報過的結束、待答題目、靜默與叫醒失敗；退出碼同單一 `wait`，另有 `idle: true` 表示沒有進行中的工作。
 - **收尾模式**：剩不超過 3 張小單，或上線後使用者在旁實測的調整期，技術長說一聲「剩 N 項，改我自己做」就自己改；修前補驗、驗收重跑、外部審查與逐張提交照舊，秘密、權限、錢與對外契約仍走 junior。
+- **junior 遵循 YAGNI**：工人 prompt（`templates/worker-prompt.md`，pi、ZCode、Haiku 共用）要求只做工單要求的事，優先最小、最直接的解法（一行能解決就不寫十行），不加工單沒要求的抽象、選項、相容層或防禦碼；但不為了縮短犧牲可讀性、錯誤處理或驗收。這條只給 junior，技術長不受限。
 - **pi junior 改走 RPC 驅動程式**：`scripts/pi-worker-driver.py` 以 `pi --mode rpc` 啟動 pi，取代原本整輪結束才輸出的 `-p` 文字模式。驅動程式負責即時進度、轉接發問，並照文字模式判斷成敗（模型出錯時 pi 自己仍回 0，驅動程式改回 exit 1）；訊號轉送、父程序死掉 pi 跟著收尾、Relay 的 worktree 鎖都照舊。
 - **`osrelay wait` 退出碼一覽**：0 查詢成功（成敗仍看 `result.status`）、3 等候逾時（工作照跑）、4 日誌靜默 900 秒、5 有題待答。4 與 5 都只通知一次：4 是同一組日誌大小只報一次，5 是每一題只報一次；例外是已經在跑的 `wait` 會回報它開始後才問的題（就算背景等待已報過），技術長前景等審查時也接得到別條鏈的發問。5 先於其他結果回報。
 - **讀題與回答**：`osrelay questions --owner <owner>` 列出待答題目全文，`osrelay answer <attempt> --qid <qid> --owner <owner> --text …` 回覆。每題只通知一次（已經在跑的 `wait` 例外，見上一條），技術長不想答就讓它 12 分鐘後逾時，之後才開始的 `wait` 不會再被同一題叫醒。
