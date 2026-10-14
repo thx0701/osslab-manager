@@ -51,4 +51,4 @@ Business acceptance：透過 Paseo managed terminal 跑 runner 與 CLI，確認�
 
 ## Out of Scope
 
-跨主機調度、自動喚醒經理、自動 fallback、自動重派、自動還原／刪除、模型 API 代理、Paseo UI 改版、production 業務操作。保留原 osslab-manager skill，不取代它的判斷規則。
+跨主機調度、自動啟動或新建經理（v1.4 起有事件時叫醒已綁定的經理，見 relay-v1.4.md）、自動 fallback、自動重派、自動還原／刪除、模型 API 代理、Paseo UI 改版、production 業務操作。保留原 osslab-manager skill，不取代它的判斷規則。

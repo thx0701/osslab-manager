@@ -5,3 +5,5 @@ __pycache__/
 build/
 dist/
 .relay-state/
+# Test double for the Paseo CLI layout the wake helper imports (dist/utils/*.js).
+!tests/fixtures/fake-paseo-cli/dist/

@@ -13,6 +13,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = [sys.executable, '-m', 'osrelay']
+sys.path.insert(0, str(ROOT))
+from osrelay import wake  # noqa: E402  (v1.4 waker runs in-process with an injected clock)
+from osrelay.artifacts import now  # noqa: E402
+from osrelay.store import Store  # noqa: E402
 
 
 class RelayTest(unittest.TestCase):
@@ -37,7 +41,8 @@ class RelayTest(unittest.TestCase):
         # Pi sessions live under $HOME; never touch the real one.
         self.home = self.base / 'home'
         self.home.mkdir()
-        self.env = dict(os.environ, HOME=str(self.home))
+        # Never reach the real Paseo daemon from tests; wake tests point this at a fake helper.
+        self.env = dict(os.environ, HOME=str(self.home), OSRELAY_WAKE_HELPER='off')
 
     def tearDown(self):
         (self.base / 'gate').touch()
@@ -246,7 +251,8 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(self.call('status', 't1')['state'], 'running')
 
     def test_silence_notifies_once_and_does_not_cancel(self):
-        self.write_ticket(gate=str(self.base / 'hold'))
+        # tearDown opens 'gate'; a gate it never opens leaves the fixture worker polling forever.
+        self.write_ticket(gate=str(self.base / 'gate'))
         self.create()
         attempt = self.enqueue()
         self.runner()
@@ -903,7 +909,7 @@ sys.stdin.read()
         self.assertIsNone(listed[0]['goal_id'])
         self.assertIsNone(listed[0]['chain'])
         with sqlite3.connect(self.state / 'relay.sqlite3') as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             columns = {row[1] for row in db.execute('PRAGMA table_info(tasks)')}
             self.assertTrue(db.execute("SELECT 1 FROM sqlite_master WHERE name='questions'").fetchone())
         self.assertIn('goal_id', columns)
@@ -1112,7 +1118,7 @@ sys.stdin.read()
         self.assertEqual(self.completed(glm['id'])['status'], 'succeeded')
         self.assertEqual(json.loads(out.read_text()), dict.fromkeys(env))
 
-    def test_v2_database_upgrades_to_questions_and_v4_is_refused(self):
+    def test_v2_database_upgrades_to_questions_and_v5_is_refused(self):
         import sqlite3
         self.create()
         with sqlite3.connect(self.state / 'relay.sqlite3') as db:
@@ -1121,9 +1127,372 @@ sys.stdin.read()
         self.assertEqual(self.call('list')[0]['id'], 't1')
         self.assertEqual(self.call('status', 't1')['questions'], [])
         with sqlite3.connect(self.state / 'relay.sqlite3') as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
-            db.execute('PRAGMA user_version=4')
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+            db.execute('PRAGMA user_version=5')
         self.call('list', error='schema_version')
+
+    # v1.4: wait --owner and waking the bound manager.
+
+    def fake_wake(self, mode='ok'):
+        """Stand-in for paseo-wake.mjs: logs argv and stdin, answers per the mode file (ok or an error code)."""
+        log, control = self.base / 'wake.log', self.base / 'wake-mode'
+        control.write_text(mode)
+        script = self.base / 'fake-wake'
+        script.write_text(f'''#!{sys.executable}
+import json, pathlib, sys
+entry = {{'argv': sys.argv[1:], 'stdin': sys.stdin.read()}}
+with open({str(log)!r}, 'a') as f:
+    f.write(json.dumps(entry) + '\\n')
+mode = pathlib.Path({str(control)!r}).read_text().strip()
+if mode == 'ok':
+    print(json.dumps({{'ok': True, 'status': 'running'}})); sys.exit(0)
+print(json.dumps({{'ok': False, 'code': mode, 'message': 'fake ' + mode}})); sys.exit(3)
+''')
+        script.chmod(0o755)
+        return script, log, control
+
+    def install_skill(self):
+        installed = self.home / '.agents/skills/osslab-manager'
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists():
+            installed.symlink_to(self.skill, target_is_directory=True)
+
+    def wake_log(self, log):
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def wait_owner_raw(self, owner, *extra):
+        return subprocess.run([*CLI, '--state', str(self.state), 'wait', '--owner', owner, *map(str, extra)],
+                              cwd=ROOT, capture_output=True, text=True, timeout=30, env=self.env)
+
+    def owner_report(self, owner, code, *extra):
+        p = self.wait_owner_raw(owner, '--timeout', '0', *extra)
+        self.assertEqual(p.returncode, code, p.stdout + p.stderr)
+        data = json.loads(p.stderr if p.returncode else p.stdout)
+        return data['error']['details'] if p.returncode else data['result']
+
+    def ended(self, task, count=1):
+        return self.eventually(lambda: (lambda a: len(a) >= count and all(
+            x['status'] in ('succeeded', 'failed', 'interrupted') for x in a))(self.call('status', task)['attempts']))
+
+    def waker(self, helper, clock):
+        os.environ['OSRELAY_WAKE_HELPER'] = str(helper)
+        self.addCleanup(os.environ.pop, 'OSRELAY_WAKE_HELPER', None)
+        store = Store(self.state)
+        self.addCleanup(store.close)
+        return store, wake.Waker(store, clock=lambda: clock[0])
+
+    def wake_round(self, waker):
+        waker.start_due()
+        until = time.monotonic() + 10
+        while waker.busy() and time.monotonic() < until:
+            waker.collect()
+            time.sleep(.02)
+        self.assertFalse(waker.busy())
+
+    def test_wait_owner_reports_each_end_once_across_tasks_then_idles(self):
+        self.write_ticket(edit='edited\n')
+        self.create()
+        first = self.enqueue()
+        second = self.extra_task('b', 'manager')
+        theirs = self.extra_task('c', 'other')
+        self.runner()
+        for task in ('t1', 'b', 'c'):
+            self.ended(task)
+        report = self.owner_report('manager', 0)
+        self.assertEqual(sorted(a['id'] for a in report['attempts']), sorted([first['id'], second['id']]))
+        self.assertEqual({a['status'] for a in report['attempts']}, {'succeeded'})
+        self.assertEqual((report['questions'], report['silent'], report['running'], report['wake']), ([], [], [], None))
+        self.assertNotIn('idle', report)
+        again = self.owner_report('manager', 0)
+        self.assertEqual((again['attempts'], again['idle']), ([], True))
+        self.assertEqual([a['id'] for a in self.owner_report('other', 0)['attempts']], [theirs['id']])
+        # A single-attempt wait reports that end too, so the owner view does not repeat it.
+        verify = self.enqueue('verify', key='v')
+        self.assertEqual(self.completed(verify['id'])['status'], 'succeeded')
+        self.assertEqual(self.owner_report('manager', 0)['attempts'], [])
+
+    def test_wait_owner_times_out_reports_silence_once_and_needs_one_target(self):
+        self.write_ticket(gate=str(self.base / 'gate'))
+        self.create()
+        attempt = self.enqueue()
+        self.runner()
+        self.eventually(lambda: (self.base / 'started').exists())
+        self.eventually(lambda: self.call('status', 't1')['attempts'][0]['status'] == 'running')
+        running = self.owner_report('manager', 3)
+        self.assertEqual((running['running'], running['attempts'], running['silent']), ([attempt['id']], [], []))
+        self.assertEqual(self.owner_report('manager', 4, '--silence', '0')['silent'], [attempt['id']])
+        self.assertEqual(self.owner_report('manager', 3, '--silence', '0')['silent'], [])
+        self.call('wait', '--timeout', '0', error='invalid_wait')
+        self.call('wait', attempt['id'], '--owner', 'manager', '--timeout', '0', error='invalid_wait')
+
+    def test_runner_wakes_the_codex_binding_once_with_ids_only(self):
+        helper, log, _ = self.fake_wake()
+        self.env['OSRELAY_WAKE_HELPER'] = str(helper)
+        self.write_ticket(edit='edited\n')
+        self.create()
+        finished = self.enqueue()
+        ask = {'qid': 'call_w', 'timeout_ms': 30000, 'payload': self.QUESTION, 'result': str(self.base / 'w.json')}
+        asking = self.extra_task('w', 'manager', ask=ask)
+        self.runner()
+        self.ended('t1')
+        self.eventually(lambda: self.call('questions'))
+        # Claude managers already get host notices: no wake by default.
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'claude', '--session', 'claude-1')
+        time.sleep(1.5)
+        self.assertEqual(self.wake_log(log), [])
+        self.call('bind', 'w', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-1')
+        entries = self.eventually(lambda: self.wake_log(log))
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['argv'], ['send', 'agent-1'])
+        text = entries[0]['stdin']
+        self.assertTrue(text.startswith('[osrelay 叫醒] owner manager：'), text)
+        self.assertIn('t1/worker/succeeded', text)
+        self.assertIn('1 題工人發問待答', text)
+        self.assertIn('osrelay wait --owner manager --timeout 0', text)
+        for worker_text in (self.QUESTION['where'], self.QUESTION['recommendation'], 'Fixture completed'):
+            self.assertNotIn(worker_text, text)
+        # The helper logs before the runner collects its answer and records the outcome.
+        sent = self.eventually(lambda: [e['body'] for e in self.call('status', 't1')['events']
+                                        if e['kind'] == 'wake_sent'])
+        self.assertEqual(sent, [{'session': 'agent-1', 'attempts': [finished['id']], 'questions': []}])
+        sent = [e['body'] for e in self.call('status', 'w')['events'] if e['kind'] == 'wake_sent']
+        self.assertEqual(sent, [{'session': 'agent-1', 'attempts': [], 'questions': ['call_w']}])
+        # The manager's check: the question first (5), carrying the finished attempt in the same report.
+        report = self.owner_report('manager', 5)
+        self.assertEqual(([a['id'] for a in report['attempts']], [q['qid'] for q in report['questions']]),
+                         ([finished['id']], ['call_w']))
+        self.call('answer', asking['id'], '--qid', 'call_w', '--owner', 'manager', '--text', '准許')
+        self.ended('w')
+        # That end is news, but the 60-second pacing holds it for a later wake.
+        time.sleep(1.5)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        self.install_skill()
+        doctor = self.call('doctor')['wake']
+        self.assertEqual((doctor['enabled'], doctor['helper'], doctor['check']['ok']), (True, 'override', True))
+        self.assertEqual([(b['owner'], b['session'], b['wake']) for b in doctor['bindings']],
+                         [('manager', 'agent-1', 1)])
+        self.assertEqual(self.wake_log(log)[-1]['argv'], ['check'])
+
+    def test_waker_paces_merges_and_skips_what_a_wait_reported(self):
+        from datetime import datetime, timedelta
+        helper, log, _ = self.fake_wake()
+        self.write_ticket(edit='edited\n')
+        self.create()
+        first = self.enqueue()
+        self.runner()
+        self.ended('t1')
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-1')
+        clock = [datetime.fromisoformat(now())]
+        store, waker = self.waker(helper, clock)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        self.assertIn('t1/worker/succeeded', self.wake_log(log)[0]['stdin'])
+        verify = self.enqueue('verify', key='v')
+        self.ended('t1', 2)
+        review = self.enqueue('review', key='r')
+        self.ended('t1', 3)
+        self.wait_raw(review['id'], '--timeout', '0')  # a manager already saw the review end
+        clock[0] += timedelta(seconds=10)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        clock[0] += timedelta(seconds=61)
+        self.wake_round(waker)
+        entries = self.wake_log(log)
+        self.assertEqual(len(entries), 2)
+        self.assertIn('1 個 attempt 結束（t1/verify/succeeded）', entries[1]['stdin'])
+        self.assertNotIn('review', entries[1]['stdin'])
+        woken = {row['id']: row['woken'] for row in store.db.execute('SELECT id,woken FROM attempts')}
+        self.assertIsNotNone(woken[verify['id']])
+        self.assertIsNone(woken[review['id']])
+        clock[0] += timedelta(seconds=61)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 2)
+
+    def test_waker_backs_off_never_resends_the_same_events_and_a_wait_reports_each_new_reason_once(self):
+        from datetime import datetime, timedelta
+        helper, log, control = self.fake_wake('agent_archived')
+        self.write_ticket(edit='edited\n')
+        self.create()
+        first = self.enqueue()
+        self.runner()
+        self.ended('t1')
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-x')
+        clock = [datetime.fromisoformat(now())]
+        store, waker = self.waker(helper, clock)
+        self.wake_round(waker)
+        binding = store.binding('manager')
+        self.assertEqual((binding['fail_code'], binding['fail_count']), ('agent_archived', 1))
+        self.assertIsNone(store.db.execute('SELECT woken FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        # No retry for the same event, even after the backoff: it rides along with the next new one.
+        for seconds in (120, 301, 600):
+            clock[0] += timedelta(seconds=seconds)
+            self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        verify = self.enqueue('verify', key='v')
+        self.ended('t1', 2)
+        self.wake_round(waker)
+        entries = self.wake_log(log)
+        self.assertEqual(len(entries), 2)
+        self.assertIn('2 個 attempt 結束（t1/worker/succeeded, t1/verify/succeeded）', entries[1]['stdin'])
+        self.assertEqual(store.binding('manager')['fail_count'], 2)
+        failed = [e['body'] for e in self.call('status', 't1')['events'] if e['kind'] == 'wake_failed']
+        self.assertEqual(failed, [{'session': 'agent-x', 'attempts': [first['id']], 'questions': [],
+                                   'code': 'agent_archived', 'message': 'fake agent_archived'}])
+        report = self.owner_report('manager', 0)
+        self.assertEqual([a['id'] for a in report['attempts']], [first['id'], verify['id']])
+        self.assertEqual((report['wake']['code'], report['wake']['count'], report['wake']['session']),
+                         ('agent_archived', 2, 'agent-x'))
+        self.assertIsNone(self.owner_report('manager', 0)['wake'])
+        control.write_text('agent_not_found')
+        self.enqueue('review', key='r')
+        self.ended('t1', 3)
+        clock[0] += timedelta(seconds=301)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 3)
+        self.assertEqual(self.owner_report('manager', 0)['wake']['code'], 'agent_not_found')
+        # A new bind clears the failure.
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-y')
+        binding = store.binding('manager')
+        self.assertEqual((binding['fail_code'], binding['fail_count'], binding['fail_batch']), (None, 0, None))
+
+    def test_owners_bound_to_one_session_share_one_wake_and_its_pacing(self):
+        from datetime import datetime, timedelta
+        helper, log, _ = self.fake_wake()
+        self.write_ticket(edit='edited\n')
+        self.create()
+        self.enqueue()
+        self.extra_task('b', 'reviewer')
+        self.runner()
+        self.ended('t1')
+        self.ended('b')
+        for task, owner in (('t1', 'manager'), ('b', 'reviewer')):
+            self.call('bind', task, '--owner', owner, '--runtime', 'codex', '--session', 'agent-1')
+        clock = [datetime.fromisoformat(now())]
+        store, waker = self.waker(helper, clock)
+        self.wake_round(waker)
+        entries = self.wake_log(log)
+        self.assertEqual([e['argv'] for e in entries], [['send', 'agent-1']])
+        self.assertIn('owner manager：1 個 attempt 結束（t1/worker/succeeded）', entries[0]['stdin'])
+        self.assertIn('owner reviewer：1 個 attempt 結束（b/worker/succeeded）', entries[0]['stdin'])
+        self.assertTrue(entries[0]['stdin'].endswith('osrelay wait --owner manager --timeout 0；'
+                                                     'osrelay wait --owner reviewer --timeout 0'), entries[0]['stdin'])
+        self.enqueue('verify', key='v')
+        self.ended('t1', 2)
+        clock[0] += timedelta(seconds=30)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        clock[0] += timedelta(seconds=31)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 2)
+
+    def test_wake_targets_the_latest_bind_and_respects_wake_off(self):
+        from datetime import datetime, timedelta
+        helper, log, _ = self.fake_wake()
+        self.write_ticket(edit='edited\n')
+        self.create()
+        self.enqueue()
+        self.extra_task('b', 'manager')
+        self.runner()
+        self.ended('t1')
+        self.ended('b')
+        clock = [datetime.fromisoformat(now())]
+        store, waker = self.waker(helper, clock)
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-1', '--wake', 'off')
+        self.wake_round(waker)
+        self.assertEqual(self.wake_log(log), [])
+        self.call('bind', 'b', '--owner', 'manager', '--runtime', 'claude', '--session', 'claude-2', '--wake', 'on')
+        self.wake_round(waker)
+        entries = self.wake_log(log)
+        self.assertEqual([e['argv'] for e in entries], [['send', 'claude-2']])
+        self.assertIn('2 個 attempt 結束', entries[0]['stdin'])
+        # OSRELAY_WAKE_HELPER=off: nothing is sent and nothing is recorded as a failure.
+        self.enqueue('verify', key='v')
+        self.ended('t1', 2)
+        os.environ['OSRELAY_WAKE_HELPER'] = 'off'
+        clock[0] += timedelta(seconds=61)
+        self.wake_round(waker)
+        self.assertEqual(len(self.wake_log(log)), 1)
+        self.assertIsNone(store.binding('manager')['fail_code'])
+
+    @unittest.skipUnless(shutil.which('node'), 'the wake helper runs under node')
+    def test_wake_helper_steers_only_where_paseo_will_not_interrupt(self):
+        state, log = self.base / 'paseo.json', self.base / 'paseo.log'
+        def agent(name, status, turn=None, archived=None):
+            return {'id': name, 'status': status, 'archivedAt': archived,
+                    'activeTurn': {'turnId': turn, 'startedAt': None} if turn else None}
+        agents = {'idle': agent('idle', 'idle'), 'busy': agent('busy', 'running', 'codex-turn-4'),
+                  'goal': agent('goal', 'running', 'autonomous-62a3'),
+                  'old': agent('old', 'closed', archived='2026-10-14T00:00:00Z')}
+        state.write_text(json.dumps({'connect': True, 'agents': agents}))
+        env = dict(self.env, OSRELAY_PASEO_CLI=str(ROOT / 'tests/fixtures/fake-paseo-cli'),
+                   FAKE_PASEO_STATE=str(state), FAKE_PASEO_LOG=str(log))
+
+        def helper(*args, text='[osrelay 叫醒] owner m：1 個 attempt 結束\n'):
+            p = subprocess.run(['node', str(ROOT / 'osrelay/paseo-wake.mjs'), *args], input=text,
+                               capture_output=True, text=True, timeout=20, env=env)
+            return p.returncode, json.loads(p.stdout)
+        self.assertEqual(helper('check'), (0, {'ok': True}))
+        self.assertEqual(helper('send', 'idle'), (0, {'ok': True, 'status': 'idle'}))
+        self.assertEqual(helper('send', 'busy'), (0, {'ok': True, 'status': 'running'}))
+        # A Codex /goal continuation would be interrupted, not steered; archived or missing agents are not targets.
+        for name, code in (('goal', 'agent_autonomous_turn'), ('old', 'agent_archived'), ('none', 'agent_not_found')):
+            exit_code, data = helper('send', name)
+            self.assertEqual((exit_code, data['ok'], data['code']), (3, False, code))
+        self.assertEqual(helper('send', 'idle', text='/goal pause')[1]['code'], 'invalid_message')
+        self.assertEqual(helper('send')[1]['code'], 'usage')
+        sent = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([(s['agentId'], s['text'], s['options']) for s in sent],
+                         [(name, '[osrelay 叫醒] owner m：1 個 attempt 結束', {'activeTurnBehavior': 'steer'})
+                          for name in ('idle', 'busy')])
+        state.write_text(json.dumps({'connect': False, 'agents': {}}))
+        exit_code, data = helper('check')
+        self.assertEqual((exit_code, data['code']), (1, 'paseo_unavailable'))
+
+    def test_wake_message_is_a_fixed_template(self):
+        attempts = [{'task_id': f't{i}', 'kind': 'worker', 'status': 'failed'} for i in range(7)]
+        questions = [{'deadline': '2026-10-14T03:41:00.000000+08:00'}, {'deadline': '2026-10-14T03:12:30.000000+08:00'}]
+        text = wake.message([('/evil\nowner', attempts, questions)])
+        self.assertTrue(text.startswith('[osrelay 叫醒] owner /evil owner：'), text)
+        self.assertNotIn('\n', text)
+        self.assertIn('7 個 attempt 結束（t0/worker/failed, t1/worker/failed, t2/worker/failed, t3/worker/failed, '
+                      't4/worker/failed 等共 7 個）', text)
+        self.assertIn('2 題工人發問待答（最早期限 03:12）', text)
+        self.assertTrue(text.endswith("osrelay wait --owner '/evil owner' --timeout 0"), text)
+        # Many owners on one session: a count-only notice that still fits the helper's 4000-character limit.
+        crowd = [(f'owner-{i}-' + 'x' * 80, attempts, questions) for i in range(40)]
+        text = wake.message(crowd)
+        self.assertLessEqual(len(text), wake.MAX_MESSAGE)
+        self.assertTrue(text.startswith('[osrelay 叫醒] 40 個 owner 共 280 個 attempt 結束、80 題工人發問待答。'), text)
+        self.assertIn('osrelay wait --owner <owner> --timeout 0', text)
+
+    def test_v3_upgrade_never_reports_or_wakes_history(self):
+        import sqlite3
+        from datetime import datetime
+        helper, log, _ = self.fake_wake()
+        self.write_ticket(edit='edited\n')
+        self.create()
+        self.enqueue()
+        self.runner()
+        self.ended('t1')
+        runner = self.runners[0]
+        runner.terminate()
+        runner.wait(timeout=10)
+        with sqlite3.connect(self.state / 'relay.sqlite3') as db:
+            for statement in ('ALTER TABLE attempts DROP COLUMN reported', 'ALTER TABLE attempts DROP COLUMN woken',
+                              'ALTER TABLE questions DROP COLUMN woken', 'DROP TABLE bindings', 'PRAGMA user_version=3'):
+                db.execute(statement)
+        report = self.owner_report('manager', 0)
+        self.assertEqual((report['attempts'], report['idle']), ([], True))
+        with sqlite3.connect(self.state / 'relay.sqlite3') as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+        self.call('bind', 't1', '--owner', 'manager', '--runtime', 'codex', '--session', 'agent-1')
+        store, waker = self.waker(helper, [datetime.fromisoformat(now())])
+        self.wake_round(waker)
+        self.assertEqual(self.wake_log(log), [])
+        self.install_skill()
+        self.assertEqual(self.call('doctor')['wake'], {'enabled': False, 'helper': 'off', 'bindings': [
+            dict(store.db.execute('SELECT owner,runtime,session,wake,bound_at,last_sent,last_ok,fail_at,fail_code,'
+                                  'fail_message,fail_count FROM bindings').fetchone())]})
 
     def test_accepted_task_refuses_new_work_handoff_and_block(self):
         accepted = self.accept_current()

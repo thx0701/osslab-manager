@@ -4,7 +4,7 @@
 
 你想要的是一個**資深技術長帶 junior 工程師**的團隊：技術長的判斷力與持續力都在，junior 的成本與速度也都在。
 
-這個 skill 就是這個團隊。強模型（Claude Opus 5.5+／GPT-6 Astra）當**技術長**：盤點現況、拆工單、定驗收，不寫實作碼——它的每一分額度都花在判斷上。便宜快速的 Flash 級模型當 **junior 工程師**埋頭寫碼，卡在範圍或契約衝突時可以在施工中直接問技術長。再找另一家廠商的模型做唯讀 code review，技術長逐條核實、親自重跑每條驗收命令，逐張提交。
+這個 skill 就是這個團隊。強模型（Claude Opus 5.5+／GPT-6 Astra）當**技術長**：盤點現況、拆工單、定驗收，原則上不寫實作碼（只在收尾剩幾張小單、或審查的小修時自己改）——它的額度幾乎都花在判斷上。便宜快速的 Flash 級模型當 **junior 工程師**埋頭寫碼，卡在範圍或契約衝突時可以在施工中直接問技術長。再找另一家廠商的模型做唯讀 code review，技術長逐條核實、親自重跑每條驗收命令，逐張提交。
 
 **資深的判斷，junior 的成本**——goal 再大，燒的是 DeepSeek Flash，不是你的 Opus 訂閱。
 
@@ -38,6 +38,10 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 
 ## 近期更新（2026-10）
 
+- **Relay 叫醒技術長**：attempt 結束或 junior 發問時，Relay 經 Paseo 的 steer 送一則固定格式的通知給該 owner 最近 `bind` 的 session（Codex 預設開、Claude 預設關；`bind --wake on|off`）。steer 不打斷進行中的指令，會提前結束 Codex 的原生 `sleep`。通知只列 id、狀態與期限，不含 junior 寫的文字。
+- **Codex 技術長改用 5 分鐘 sleep**：原生 `sleep` 5 分鐘，醒來用 `osrelay wait --owner <owner> --timeout 0` 一次查完同 owner 所有鏈；有事件時叫醒會提前結束 sleep，叫醒壞了 sleep 仍保底。起因是 1 秒 yield 輪詢讓等待佔了 token 四到五成。
+- **`osrelay wait --owner`**：一次看同 owner 所有 attempt，回報還沒回報過的結束、待答題目、靜默與叫醒失敗；退出碼同單一 `wait`，另有 `idle: true` 表示沒有進行中的工作。
+- **收尾模式**：剩不超過 3 張小單，或上線後使用者在旁實測的調整期，技術長說一聲「剩 N 項，改我自己做」就自己改；修前補驗、驗收重跑、外部審查與逐張提交照舊，秘密、權限、錢與對外契約仍走 junior。
 - **pi junior 改走 RPC 驅動程式**：`scripts/pi-worker-driver.py` 以 `pi --mode rpc` 啟動 pi，取代原本整輪結束才輸出的 `-p` 文字模式。驅動程式負責即時進度、轉接發問，並照文字模式判斷成敗（模型出錯時 pi 自己仍回 0，驅動程式改回 exit 1）；訊號轉送、父程序死掉 pi 跟著收尾、Relay 的 worktree 鎖都照舊。
 - **`osrelay wait` 退出碼一覽**：0 查詢成功（成敗仍看 `result.status`）、3 等候逾時（工作照跑）、4 日誌靜默 900 秒、5 有題待答。4 與 5 都只通知一次：4 是同一組日誌大小只報一次，5 是每一題只報一次；例外是已經在跑的 `wait` 會回報它開始後才問的題（就算背景等待已報過），技術長前景等審查時也接得到別條鏈的發問。5 先於其他結果回報。
 - **讀題與回答**：`osrelay questions --owner <owner>` 列出待答題目全文，`osrelay answer <attempt> --qid <qid> --owner <owner> --text …` 回覆。每題只通知一次（已經在跑的 `wait` 例外，見上一條），技術長不想答就讓它 12 分鐘後逾時，之後才開始的 `wait` 不會再被同一題叫醒。
@@ -109,7 +113,9 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 - 先量再問：盤點產出缺口表，人選範圍；拆單「人管範圍、技術長管粒度」
 - 工單有 `blocked-by` 依賴；不同 worktree 平行跑不同鏈
 - 審查分級（`review-tier`）：動到斷言／guard／錢權類一律高階，只升不降
-- 技術長直修：已核實的非阻擋小 nit 可直接改；阻擋級照舊走 junior
+- 技術長直修：已核實的非阻擋小 nit 可直接改；阻擋級照舊走 junior（收尾模式例外）
+- 收尾模式：剩 3 張以內的小單或上線後調整期，技術長自己改，閘門照舊
+- Relay 叫醒：attempt 結束或發問時經 Paseo steer 叫醒技術長，Codex 用 5 分鐘 sleep 保底
 - 死單回收：PID 重用檢查、半套改動先備份、重派記在同一張單
 - 三段式 session 與 2KB 交接
 - 團隊時間戳用台灣時間（+0800）

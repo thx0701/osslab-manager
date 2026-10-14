@@ -2,10 +2,10 @@
 
 `osrelay` 是 [osslab-manager](https://github.com/thx0701/osslab-manager) 的本機執行底座；公開版放在該 repo 的 `relay/` 子目錄，可直接在子目錄執行 `python3 deploy/install-user.py` 安裝。
 經理判斷需求、審查與驗收；Relay 保管派工、程序、等待、恢復、阻塞與交接。
-Codex／Claude Code 在既有 session 呼叫同一 CLI（Paseo 上或一般終端機皆可）；Relay 不喚醒、不新建經理，自動開下一段由 Paseo 的 `create_agent` 負責。
+Codex／Claude Code 在既有 session 呼叫同一 CLI（Paseo 上或一般終端機皆可）；Relay 不新建經理；attempt 結束或工人發問時，經 Paseo steer 叫醒該 owner 最近 `bind` 的經理 session（Codex 預設開、Claude 預設關），自動開下一段由 Paseo 的 `create_agent` 負責。
 
 需要 Linux、Python 3.11+、Git，以及已安裝的 osslab-manager skill 和它依賴的模型 CLI。
-Python runtime 沒有第三方依賴。SQLite 與執行證據預設放在 `~/.local/state/osslab-relay`。
+Python runtime 沒有第三方依賴；叫醒 helper 需要 PATH 上的 `node` 與 `paseo`（沒有就只是叫不醒，其他功能照常）。SQLite 與執行證據預設放在 `~/.local/state/osslab-relay`。
 
 ## 開始使用
 

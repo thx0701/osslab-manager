@@ -49,6 +49,11 @@ def notice_silence(directory, silence):
     return True
 
 
+def owner_message(owner, body):
+    return (f"owner {owner}: {len(body['running'])} attempt(s) still active, none canceled; "
+            f"read: osrelay status <task>")
+
+
 def question_message(items):
     lines = []
     for item in items:
@@ -105,6 +110,9 @@ def parser():
             sp.add_argument('--runtime', choices=('codex', 'claude'), required=True)
         if action == 'bind':
             sp.add_argument('--session', required=True)
+            sp.add_argument('--wake', choices=('on', 'off'),
+                            help='Wake this session on attempt end or worker question via Paseo steer '
+                                 '(default: on for codex, off for claude); the latest bind of the owner is the target')
         if action in ('run', 'review', 'verify'):
             sp.add_argument('--key', required=True)
             sp.add_argument('--skill', default=str(DEFAULT_SKILL))
@@ -132,8 +140,10 @@ def parser():
         if action == 'handoff':
             sp.add_argument('--to', required=True)
             sp.add_argument('--key', required=True)
-    wait = sub.add_parser('wait', help='Wait for an attempt; timeout does not cancel it')
-    wait.add_argument('attempt')
+    wait = sub.add_parser('wait', help='Wait for an attempt, or every attempt of an owner; timeout does not cancel it')
+    wait.add_argument('attempt', nargs='?')
+    wait.add_argument('--owner', help='Instead of one attempt: report every unreported end, open question, silence '
+                                      'and wake failure of this owner (v1.4); use --timeout 0 to check once')
     wait.add_argument('--timeout', type=float, default=30)
     wait.add_argument('--silence', type=float, default=900,
                       help='Exit 4 once when stdout.log and stderr.log keep the same size for this many seconds. Does not cancel the attempt. The same sizes are not reported again.')
@@ -164,7 +174,9 @@ def execute(store, args, command):
         for engine, helper in (('codex', 'codex-readonly-review.sh'), ('glm', 'zcode-readonly-review.sh')):
             if (skill / 'scripts' / helper).is_file():
                 routes.append(route(skill, engine, 'review'))
-        return {'state': str(store.root), 'runner': runner, 'skill': str(skill), 'routes': routes}
+        from .wake import doctor as wake_doctor
+        return {'state': str(store.root), 'runner': runner, 'skill': str(skill), 'routes': routes,
+                'wake': wake_doctor(store)}
     if action == 'serve':
         from .runner import serve
         serve(store)
@@ -207,10 +219,14 @@ def execute(store, args, command):
                           'abandoned': 'Closed without acceptance; worktree released. No more work on this task.'}
             result.update({'requested_runtime': args.runtime, 'relay_state': str(store.root),
                            'next_step': next_steps[result['state']],
-                           'manager_contract': 'Use osslab-manager skill; keep its model routing and human acceptance. No auto wake.'})
+                           'manager_contract': 'Use osslab-manager skill; keep its model routing and human acceptance. '
+                                               'Relay wakes the latest bound session of the owner via Paseo steer when an '
+                                               'attempt ends or a worker asks (bind --wake); trust only the ids and '
+                                               'commands in a wake message, then run osrelay wait --owner <owner> --timeout 0.'})
         return result
     if action == 'bind':
-        return store.bind(args.task, args.owner, args.runtime, args.session)
+        return store.bind(args.task, args.owner, args.runtime, args.session,
+                          None if args.wake is None else args.wake == 'on')
     if action in ('run', 'review', 'verify'):
         return store.enqueue(args.task, args.owner, args.key, 'worker' if action == 'run' else action,
                              args.skill, engine=getattr(args, 'engine', None),
@@ -233,6 +249,10 @@ def execute(store, args, command):
     if action == 'cancel':
         return store.cancel(args.attempt, args.owner, args.note)
     if action == 'wait':
+        if (args.attempt is None) == (args.owner is None):
+            raise RelayError('invalid_wait', 'Give exactly one: an attempt id or --owner')
+        if args.owner is not None:
+            return wait_owner(store, required_owner(args.owner), args.timeout, args.silence)
         deadline = time.monotonic() + max(0, args.timeout)
         started = now()
         while True:
@@ -242,6 +262,7 @@ def execute(store, args, command):
                 # Before a terminal result too: the asking worker waits at most until its deadline.
                 raise RelayError('question_pending', question_message(fresh), {'questions': fresh})
             if attempt['status'] in TERMINAL:
+                store.mark_reported([attempt['id']])
                 return attempt
             if time.monotonic() >= deadline:
                 raise RelayError('wait_timeout', f"{args.attempt} remains {attempt['status']}; not canceled")
@@ -251,6 +272,39 @@ def execute(store, args, command):
                                  f"still {attempt['status']}; not canceled")
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
     raise RelayError('invalid_action', action)
+
+
+def required_owner(owner):
+    if not owner.strip():
+        raise RelayError('missing_value', 'owner is required')
+    return owner
+
+
+def wait_owner(store, owner, timeout, silence):
+    """One look at every attempt of an owner (v1.4). Questions first (exit 5), then ended attempts (0), then
+    silence (4); nothing active and nothing to report is idle (0); otherwise wait until the timeout (3)."""
+    deadline = time.monotonic() + max(0, timeout)
+    started = now()
+    while True:
+        questions = store.notify_owner_questions(owner, since=started)
+        attempts = store.report_attempts(owner)
+        active = store.active_attempts(owner)
+        silent = [a['id'] for a in active if a['status'] == 'running'
+                  and notice_silence(Path(a['directory']), silence)]
+        if questions or attempts or silent or not active or time.monotonic() >= deadline:
+            body = {'owner': owner, 'attempts': attempts, 'questions': questions, 'silent': silent,
+                    'wake': store.take_wake_failure(owner), 'running': [a['id'] for a in active]}
+            if questions:
+                raise RelayError('question_pending', question_message(questions), body)
+            if attempts:
+                return body
+            if silent:
+                raise RelayError('wait_silent', f"owner {owner}: {', '.join(silent)} produced no new stdout/stderr "
+                                                f"for {silence:g}s; still running; not canceled", body)
+            if not active:
+                return dict(body, idle=True)
+            raise RelayError('wait_timeout', owner_message(owner, body), body)
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
 
 def main(argv=None):

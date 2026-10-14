@@ -23,6 +23,7 @@ installer 不會起程序，也拒絕未提交來源、覆蓋非 Relay launcher 
 更新前確認舊 runner 已排空，再 graceful restart；不要把更新中的 repo 直接當正式 runtime。
 升級前也要讓 queued attempt 跑完或先 cancel：舊版排入的 attempt 沒記排隊前狀態，新版 cancel 一律回到 ready。
 回退可把 current symlink 指回仍保留的舊 release，再排空／重啟 runner。schema version 2 起，v1 程式會拒絕開啟已升級的 state；要回退就不要先升級，或繼續用帶 version 2 的 release。
+v1.4 把 state 升到 schema version 4，v1.3 程式會拒絕開啟；要回退 v1.3 就不要先升級。
 
 若只做 staged smoke，在 Paseo managed terminal 以前景命令運行：
 
@@ -39,7 +40,7 @@ Paseo workspace 用現有 Git worktree。請對 Codex 或 Claude Code 說：
 
 > 使用 osslab-manager skill，派工與等待改走 osrelay。先 osrelay doctor、osrelay list，
 > 有既有任務就 context，讀完整歷史與回執後接手。不要重複派同一工作樹。
-> 首版不自動喚醒；照下方「等待」一次等到底，不用短逾時反覆輪詢。
+> 照下方「等待」：Codex 用原生 sleep 5 分鐘加 `osrelay wait --owner` 查一次，Relay 叫醒會提前結束 sleep。
 
 ```sh
 osrelay create --id project-ticket-001 --owner project-manager --workdir /workspace --ticket /outside/workspace/ticket.md
@@ -48,7 +49,7 @@ osrelay context project-ticket-001 --runtime codex
 ```
 
 Claude Code 使用 `--runtime claude`，不改 owner；owner 表示負責角色，session 只是當前承接者。
-換 session 先 list/context/bind 即可。真正移交責任用 handoff，後繼任務含 parent 與交接原因。
+換 session 先 list/context/bind 即可；最近一次 bind 的 session 就是該 owner 的叫醒對象（`--wake on|off`，Codex 預設開、Claude 預設關）。真正移交責任用 handoff，後繼任務含 parent 與交接原因。
 
 ## skill 配合
 
@@ -58,15 +59,25 @@ Relay 路徑用 SQLite 狀態，原 Markdown 工單不挪動；CLI 傳入凍結�
 
 ## 等待
 
-`wait` 每次呼叫都是一輪經理推理，逾時設長、一次等到底：
+`wait` 每次呼叫都是一輪經理推理，不用短逾時反覆輪詢：
 
-- Claude Code：背景執行 `osrelay wait <attempt> --timeout 3600`，等 host 完成通知；退出 3 就再背景等一次。
-- Codex：單次工具約 30 秒交還；不要用 Shell 一次次跑短逾時的 `wait`。用 code-mode 跑 osslab-manager
-  `docs/relay.md` 第 4 點那個 cell（`@exec` 的 `yield_time_ms` 3600000、`osrelay wait <attempt> --timeout 3300`），
-  一次呼叫等到 attempt 結束；退出 3（仍在跑）就再跑同一個 cell。
+- Codex：原生 `sleep` 5 分鐘 → `osrelay wait --owner <owner> --timeout 0` 查一次 → 還有在跑就再 sleep（osslab-manager
+  `docs/waiting.md`）。單次 shell／code-mode 工具約 30 秒交還，Relay 叫醒要等它交還才看得到，所以不要開長時間的 cell。
+- Claude Code：背景執行 `osrelay wait --owner <owner> --timeout 3600`（或單一 `wait <attempt>`），等 host 完成通知；退出 3 就再背景等一次。
 - 其他 host：前景 `wait`，`--timeout` 設得比該 host 單次命令上限短。
 
-退出 5（`question_pending`）表示同一 owner 底下有工人在施工中發問、正在等答案（12 分鐘逾時）。`osrelay questions --owner <owner>` 讀全文，依 osslab-manager 的權限規則 `osrelay answer <attempt> --qid <qid> --owner <owner> --text …`，再回去等原本那個 attempt。每題只通知一次，但已經在跑的 `wait` 會回報它開始後才出現的題目（就算背景等待已回報過），所以前景等著審查時也接得到別條鏈的發問；答不了就回「這部分停下、寫進回執」，不要 kill 或重派。
+叫醒（v1.4）：runner 每秒檢查一次，attempt 結束或工人發問時，對該 owner 最近 bind、叫醒開著的 session 用 Paseo steer 送一則
+`[osrelay 叫醒]` 通知（只有 id、狀態與期限）：Codex 的 sleep 提前結束、在同一輪處理；閒置時開新一輪；不打斷進行中的指令。
+同一 session 的事件合成一則、至少隔 60 秒；失敗後不單獨重送，等新事件一起送且至少隔 5 分鐘；agent 不存在、已封存，或正在跑 Paseo 沒開的 autonomous 輪（Codex `/goal` 續跑，
+steer 會退回打斷）就不送，記一筆失敗，由經理的 5 分鐘 sleep 保底。helper 是 `osrelay/paseo-wake.mjs`，需要 PATH 上的
+`node` 與 `paseo`（systemd unit 的 PATH 已含 `~/.local/bin`）；`osrelay doctor` 的 `wake.check` 會實際連一次本機 Paseo daemon（以呼叫端環境執行；runner 的環境要看 service 設定，
+runner 送不出去會記在 `wake.bindings`）。
+`OSRELAY_WAKE_HELPER=off` 可整個關掉（設在 service 的 Environment）。
+
+`wait --owner` 的退出碼：5 有發問（附已結束的 attempt）、0 有 attempt 結束或 `idle: true`、4 靜默、3 還在跑；每種都附
+`attempts`、`questions`、`silent`、`wake`、`running`。`wake` 不是空的表示叫醒送不出去（同一原因只報一次），檢查 bind 的 session。
+
+退出 5（`question_pending`）表示同一 owner 底下有工人在施工中發問、正在等答案（12 分鐘逾時）。`osrelay questions --owner <owner>` 讀全文，依 osslab-manager 的權限規則 `osrelay answer <attempt> --qid <qid> --owner <owner> --text …`，再回去等。每題只通知一次，但已經在跑的 `wait` 會回報它開始後才出現的題目（就算背景等待已回報過），所以前景等著審查時也接得到別條鏈的發問；答不了就回「這部分停下、寫進回執」，不要 kill 或重派。
 
 工人 attempt 成功只表示 helper 完成且有回執；經理繼續 verify → review → 核實 → accept。
 accept 通過後 `state=accepted` 並保留 worktree 占用；經理依原 skill 自行逐張本機 commit，

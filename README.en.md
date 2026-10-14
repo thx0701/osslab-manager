@@ -4,7 +4,7 @@
 
 What you want is a **senior tech lead running junior engineers**: the lead's judgment and stamina, at the junior's cost and speed.
 
-This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the **tech lead**: it inventories the repo, splits the goal into tickets and defines acceptance — and writes no implementation code, so every unit of its quota goes into judgment. A cheap, fast Flash-tier model is the **junior engineer** who writes the code, and can ask the lead mid-task when it hits a scope or contract conflict. A model from another vendor reviews read-only; the lead verifies every finding, re-runs every acceptance command itself, and commits ticket by ticket.
+This skill is that team. A strong model (Claude Opus 5.5+ / GPT-6 Astra) is the **tech lead**: it inventories the repo, splits the goal into tickets and defines acceptance — and, apart from small review fixes and wrapping up the last few small tickets, writes no implementation code, so nearly all of its quota goes into judgment. A cheap, fast Flash-tier model is the **junior engineer** who writes the code, and can ask the lead mid-task when it hits a scope or contract conflict. A model from another vendor reviews read-only; the lead verifies every finding, re-runs every acceptance command itself, and commits ticket by ticket.
 
 **Senior judgment, junior cost** — however big the goal, what burns is DeepSeek Flash, not your Opus subscription.
 
@@ -36,6 +36,10 @@ New in this version:
 
 ## Recent changes (2026-10)
 
+- **Relay wakes the lead**: when an attempt ends or a junior asks, Relay steers one fixed-format notice through Paseo into the session the owner bound last (on by default for Codex, off for Claude; `bind --wake on|off`). A steer does not interrupt a running command and ends Codex's native `sleep` early. The notice carries only ids, statuses and deadlines, never junior-written text.
+- **Codex leads sleep 5 minutes**: native `sleep` for 5 minutes, then one `osrelay wait --owner <owner> --timeout 0` covers every chain of the owner; a wake ends the sleep early, and the sleep still covers a broken wake. Polling with 1-second yields had made waiting 40–50% of the lead's tokens.
+- **`osrelay wait --owner`**: one look at every attempt of an owner, reporting unreported ends, open questions, silence and wake failures; exit codes as for a single `wait`, plus `idle: true` when nothing is running.
+- **Wrap-up mode**: with at most 3 small tickets left, or while the user is testing right after launch, the lead says "N left, I'll do them myself" and makes the changes; failing-first checks, re-run acceptance, external review and per-ticket commits still apply, and secrets, permissions, money and external contracts still go to a junior.
 - **pi juniors now run through an RPC driver**: `scripts/pi-worker-driver.py` starts pi with `pi --mode rpc`, replacing the `-p` text mode that printed nothing until the run ended. The driver writes live progress, relays questions, and decides success the way text mode did (pi itself still exits 0 on a model error; the driver turns that into exit 1). Signal forwarding, pi exiting when its parent dies, and Relay's worktree lock are unchanged.
 - **`osrelay wait` exit codes**: 0 the query succeeded (check `result.status` for the outcome), 3 wait timeout (the work keeps running), 4 logs silent for 900 seconds, 5 a question is waiting. Both 4 and 5 are reported once: 4 once per set of log sizes, 5 once per question, except that a `wait` already running also reports questions asked after it began (even if a background wait reported them), so a lead blocked on a review still hears from other chains. 5 is reported before any other result.
 - **Reading and answering**: `osrelay questions --owner <owner>` lists open questions in full; `osrelay answer <attempt> --qid <qid> --owner <owner> --text …` replies. Each question is reported once (except to a `wait` already running, see above), so a lead that chooses not to answer lets it expire after 12 minutes; a `wait` started later is not woken by it again.
@@ -105,7 +109,9 @@ Everything works without [Paseo](https://github.com/getpaseo/paseo); Relay does 
 - Measure first, then ask: inventory produces a gap table; humans own scope, the lead owns granularity
 - `blocked-by` dependencies; independent chains run in parallel on separate worktrees
 - Review tiers (`review-tier`): anything touching assertions, guards, money or permissions is high tier; tiers only go up
-- Lead hotfix: verified non-blocking nits may be fixed directly; blocking findings still go to a junior
+- Lead hotfix: verified non-blocking nits may be fixed directly; blocking findings still go to a junior (except in wrap-up mode)
+- Wrap-up mode: up to 3 small tickets left or post-launch tuning, the lead does them itself with the same gates
+- Relay wake: a Paseo steer wakes the lead when an attempt ends or a junior asks; Codex sleeps 5 minutes as the fallback
 - Dead-ticket recovery: PID-reuse checks, partial changes backed up first, re-dispatch recorded on the same ticket
 - Three-stage sessions with 2KB handoffs
 - All timestamps in Taiwan time (UTC+8), our team's rule — see Environment if you are in another time zone

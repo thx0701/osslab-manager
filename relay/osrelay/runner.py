@@ -11,6 +11,7 @@ import time
 from .artifacts import (RelayError, acquire_lock, worktree_lock, snapshot, now,
                         atomic_json, identity, alive, digest_file, clean_env)
 from .store import Store, encode
+from .wake import Waker
 
 
 def group_alive(record):
@@ -194,6 +195,7 @@ def serve(store, interval=0.25):
         stopping = True
 
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    waker = Waker(store)
     try:
         # Reconcile pre-existing records once before dispatch; skip our own
         # live unregistered children to avoid declaring their launch uncertain.
@@ -203,7 +205,9 @@ def serve(store, interval=0.25):
             reconcile(store, {aid for aid, p in children})
             atomic_json(store.root / 'runner.json', {'process': identity(), 'heartbeat': now(), 'stopping': stopping})
             active = store.db.execute("SELECT 1 FROM attempts WHERE status IN ('launching','running') LIMIT 1").fetchone()
-            if stopping and not children and not active:
+            # v1.4: wake bound managers; while stopping only finish wakes already in flight.
+            waker.tick(stopping)
+            if stopping and not children and not active and not waker.busy():
                 return
             if not stopping:
                 rows = store.db.execute("SELECT id FROM attempts WHERE status='queued' ORDER BY created").fetchall()
@@ -213,6 +217,7 @@ def serve(store, interval=0.25):
                         children.append((row[0], process))
             time.sleep(interval)
     finally:
+        waker.close()
         os.close(lock_fd)
         for sig, handler in previous.items():
             signal.signal(sig, handler)

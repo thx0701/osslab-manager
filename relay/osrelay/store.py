@@ -56,6 +56,12 @@ QUESTIONS_V3 = '''
   CREATE INDEX IF NOT EXISTS questions_by_state ON questions(state);
   PRAGMA user_version=3;
 '''
+# v1.4：叫醒經理。每個 owner 一個叫醒對象（最後一次 bind 為準）與最近一次叫醒結果。
+BINDINGS_V4 = '''
+  CREATE TABLE IF NOT EXISTS bindings (
+    owner TEXT PRIMARY KEY, runtime TEXT NOT NULL, session TEXT NOT NULL, wake INTEGER NOT NULL,
+    bound_at TEXT NOT NULL, last_sent TEXT, last_ok TEXT, fail_at TEXT, fail_code TEXT, fail_message TEXT,
+    fail_count INTEGER NOT NULL DEFAULT 0, fail_reported TEXT, fail_batch TEXT)'''
 QUESTION_KINDS = ("scope_conflict", "contract_conflict", "ambiguous_ticket")
 MAX_QUESTION_MS = 3600000
 
@@ -103,7 +109,7 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version > 3:
+        if version > 4:
             raise RelayError("schema_version", f"Unsupported schema {version}")
         if version == 0:
             self.db.executescript(SCHEMA_V2)
@@ -112,6 +118,8 @@ class Store:
         if version < 3:
             # A v2 binary refuses user_version 3, so do not roll it back onto this file.
             self.db.executescript(QUESTIONS_V3)
+        if version < 4:
+            self._upgrade_v4()
 
     def _upgrade_v1(self):
         """Add goal/chain columns. A v1 binary refuses user_version 2, so do not roll it back onto this file."""
@@ -127,6 +135,24 @@ class Store:
             self.db.execute("ALTER TABLE tasks ADD COLUMN chain TEXT")
         self.db.execute("CREATE INDEX IF NOT EXISTS tasks_by_goal ON tasks(goal_id)")
         self.db.execute("PRAGMA user_version=2")
+
+    def _upgrade_v4(self):
+        """Wake bookkeeping. A v1.3 binary refuses user_version 4, so do not roll it back onto this file."""
+        with self.tx():
+            if self.db.execute("PRAGMA user_version").fetchone()[0] >= 4:
+                return  # Another process upgraded first; do not mark attempts that ended since then.
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(attempts)")}
+            for name in ("reported", "woken"):
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE attempts ADD COLUMN {name} TEXT")
+            if "woken" not in {row[1] for row in self.db.execute("PRAGMA table_info(questions)")}:
+                self.db.execute("ALTER TABLE questions ADD COLUMN woken TEXT")
+            self.db.execute(BINDINGS_V4)
+            # History is not news: attempts that ended before this version are never reported or woken.
+            at = now()
+            self.db.execute("UPDATE attempts SET reported=COALESCE(reported,?),woken=COALESCE(woken,?) "
+                            "WHERE status IN ('succeeded','failed','interrupted','canceled')", (at, at))
+            self.db.execute("PRAGMA user_version=4")
 
     def close(self):
         self.db.close()
@@ -241,15 +267,65 @@ class Store:
             event["body"] = json.loads(event["body"])
         return task
 
-    def bind(self, task_id, actor, runtime, session):
+    def bind(self, task_id, actor, runtime, session, wake=None):
+        """Bind the current session; it also becomes the owner's wake target (the latest bind wins, v1.4)."""
         if runtime not in ("codex", "claude"):
             raise RelayError("runtime", "Supported manager runtimes: codex, claude")
+        # Claude already gets host completion notices; Codex polls, so only Codex wakes by default.
+        wake = runtime == "codex" if wake is None else bool(wake)
         with self.tx():
             self.task(task_id, actor)
+            at = now()
             self.db.execute("UPDATE tasks SET runtime=?,session=?,updated=? WHERE id=?",
-                            (runtime, required(session, "session"), now(), task_id))
-            self.event(task_id, "manager_bound", {"runtime": runtime, "session": session, "owner": actor})
+                            (runtime, required(session, "session"), at, task_id))
+            # A bind is an explicit sign the session is alive: forget its failures. Same session keeps its pacing.
+            self.db.execute("INSERT INTO bindings(owner,runtime,session,wake,bound_at) VALUES(?,?,?,?,?) "
+                            "ON CONFLICT(owner) DO UPDATE SET runtime=excluded.runtime,session=excluded.session,"
+                            "wake=excluded.wake,bound_at=excluded.bound_at,"
+                            "last_sent=CASE WHEN bindings.session=excluded.session THEN bindings.last_sent END,"
+                            "fail_at=NULL,fail_code=NULL,fail_message=NULL,fail_count=0,fail_reported=NULL,fail_batch=NULL",
+                            (actor, runtime, session, int(wake), at))
+            self.event(task_id, "manager_bound", {"runtime": runtime, "session": session, "owner": actor, "wake": wake})
         return self.status(task_id)
+
+    def binding(self, owner):
+        row = self.db.execute("SELECT * FROM bindings WHERE owner=?", (owner,)).fetchone()
+        return dict(row) if row else None
+
+    def mark_reported(self, attempt_ids):
+        """A wait handed these terminal attempts to a manager; return the ones this call reported first."""
+        marked = []
+        if attempt_ids:
+            with self.tx():
+                for aid in attempt_ids:
+                    if self.db.execute("UPDATE attempts SET reported=? WHERE id=? AND reported IS NULL",
+                                       (now(), aid)).rowcount:
+                        marked.append(aid)
+        return marked
+
+    def report_attempts(self, owner):
+        """Terminal attempts of this owner no wait has reported yet, each reported once (v1.4 wait --owner)."""
+        rows = self.db.execute("SELECT a.* FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE t.owner=? "
+                               "AND a.status IN ('succeeded','failed','interrupted','canceled') AND a.reported IS NULL "
+                               "ORDER BY a.updated,a.id", (owner,)).fetchall()
+        marked = set(self.mark_reported([row["id"] for row in rows]))
+        return [attempt_brief(row) for row in rows if row["id"] in marked]
+
+    def active_attempts(self, owner):
+        return [dict(row) for row in self.db.execute(
+            "SELECT a.id,a.task_id,a.status,a.directory FROM attempts a JOIN tasks t ON t.id=a.task_id "
+            "WHERE t.owner=? AND a.status IN ('queued','launching','running') ORDER BY a.created,a.id", (owner,))]
+
+    def take_wake_failure(self, owner):
+        """The owner's latest wake failure, reported to one wait only."""
+        with self.tx():
+            row = self.db.execute("SELECT * FROM bindings WHERE owner=? AND fail_at IS NOT NULL AND fail_reported IS NULL",
+                                  (owner,)).fetchone()
+            if not row:
+                return None
+            self.db.execute("UPDATE bindings SET fail_reported=? WHERE owner=?", (now(), owner))
+        return {"session": row["session"], "code": row["fail_code"], "message": row["fail_message"],
+                "at": row["fail_at"], "count": row["fail_count"]}
 
     def block(self, task_id, actor, reason, resume_note, wake_condition):
         block = {"reason": required(reason, "reason"), "resume_note": required(resume_note, "resume_note"),
@@ -388,7 +464,9 @@ class Store:
             queued = self.db.execute("SELECT body FROM events WHERE attempt_id=? AND kind='queued' ORDER BY seq LIMIT 1",
                                      (attempt_id,)).fetchone()
             previous = json.loads(queued[0]).get("from", "ready") if queued else "ready"
-            self.db.execute("UPDATE attempts SET status='canceled',updated=?,error=? WHERE id=?", (now(), note, attempt_id))
+            # The manager canceled it: nothing to report or wake for.
+            self.db.execute("UPDATE attempts SET status='canceled',updated=?,error=?,reported=?,woken=? WHERE id=?",
+                            (now(), note, now(), now(), attempt_id))
             self.db.execute("UPDATE tasks SET state=?,updated=? WHERE id=?", (previous, now(), attempt["task_id"]))
             self.event(attempt["task_id"], "canceled", {"note": note}, attempt_id)
         return self.attempt(attempt_id)
@@ -649,7 +727,9 @@ class Store:
         """Pending questions of the same owner this wait reports: ones no wait has reported yet (each once), and,
         with since, ones asked after this wait began even if another wait already reported them. A manager blocked
         in one wait cannot read another wait's exit 5, so a running wait must not miss a new question."""
-        owner = self.task(self.attempt(attempt_id)["task_id"])["owner"]
+        return self.notify_owner_questions(self.task(self.attempt(attempt_id)["task_id"])["owner"], since)
+
+    def notify_owner_questions(self, owner, since=None):
         pending = self.questions(owner)
         fresh = []
         # The filter only spares a write transaction per poll; the UPDATE guard decides between concurrent waits.
@@ -844,6 +924,18 @@ def valid_question(payload):
 
 def past(deadline):
     return datetime.fromisoformat(now()) >= datetime.fromisoformat(deadline)
+
+
+def attempt_brief(row):
+    """Enough to decide what to read next; status/context have the full record."""
+    item = dict(row)
+    error = item["error"]
+    try:
+        error = json.loads(error) if error else None
+    except ValueError:
+        pass
+    return {"id": item["id"], "task": item["task_id"], "kind": item["kind"], "status": item["status"],
+            "exit_code": item["exit_code"], "error": error, "directory": item["directory"], "updated": item["updated"]}
 
 
 def question_view(row):
