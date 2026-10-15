@@ -93,7 +93,7 @@ review 優先序 Codex（預設，GPT-6 Astra medium）→ GLM（完整 GLM-5.3 
 
 測試使用獨立 fixture repo/state、Paseo managed terminal，以及真實 Codex／Claude Code session
 呼叫 CLI；fixture worker 不接付費 API。provider smoke 證明 host、PATH／絕對路徑、JSON 與接手機制；
-不能替代各模型自身的工作品質審查或 production 業務驗收。詳細本輪結果見 verification.md。
+不能替代各模型自身的工作品質審查或 production 業務驗收。各次驗收結果見對應 PR 與 git 歷史。
 
 ## 首版操作限制
 

@@ -98,7 +98,7 @@ owner 是穩定角色；Paseo session ID 另以 `bind` 記錄。相同請求重�
 ## 開發
 
 `make test` 執行真 Git／SQLite／程序的 CLI regression；模型使用離線 fixture。
-`make check` 檢查編譯與 diff。規格見 [spec](docs/specs/relay-v1.md)，驗證見 [verification](docs/verification.md)。
+`make check` 檢查編譯與 diff。規格見 [spec](docs/specs/relay-v1.md)；每次變更的驗證命令與結果寫在該次 PR 與 commit，查過去看 git 歷史。
 
 設計參考 [OpenRig](https://github.com/mvschwarz/openrig) 的持久角色與交接概念；本專案是獨立實作。
 最大項、鏈與有條件 `--resume` 的契約見 [v1.2](docs/specs/relay-v1.2.md)。
