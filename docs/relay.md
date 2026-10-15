@@ -57,7 +57,7 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
    退出 5（`question_pending`）：同一 owner 底下有 pi 工人在施工中發問，正在等答案；`error.message` 已有 attempt、qid、kind 與摘要，`error.details.questions` 有全文。依 SKILL.md 第三節「回答工人發問」的權限 `osrelay answer <attempt> --qid <qid> --owner <角色> --text …`，答不了就回「這部分停下、寫進回執」；然後回去等。每題只通知一次（例外：已經在跑的 wait 會回報它開始後才問的題，就算背景等待已回報過；之後才開始的 wait 不重報），不答就會在 12 分鐘後逾時，工人照原規則停下受影響部分；不 kill、不重派。等答案期間工人 log 會有「等經理回覆」一行，720 秒逾時短於 900 秒靜默警報。
    等 terminal status 才讀該 attempt 目錄的 receipt.md、stdout.log、stderr.log、result.json。退出 4 的那一次診斷可以看 log 尾，看完就回到等待，不把整份 log 讀進對話。
 5. worker succeeded 只到 awaiting_acceptance。經理照原 skill 逐項核實實際 diff、回執與業務驗收；
-   工單每條驗收命令各跑一次 `verify <task> --owner <角色> --key <驗證鍵> -- <命令...>`，等待並核對 schema 2 證據。
+   工單驗收入口用 `verify <task> --owner <角色> --key <驗證鍵> -- <命令...>`，等待並核對 schema 2 證據。多項檢查依 SKILL 第二節寫成清單、用 `scripts/acceptance-run.sh` 跑，工人與經理每輪只用這一條 `verify`；逐項結果看它的 `summary.json`，輸出目錄放 worktree 外。
    accept 會要求這個 task 驗過的每一條不同命令，最新一次都在目前版本通過；改了程式就全部重跑。
    沒有 active attempt 時先逐檔 `git add -N -- <允許的新增檔>`，再下 verify 指令；排隊後也不能改 index。
 6. 審查包仍照原 skill 寫。`review <task> --owner <角色> --key <審查鍵> --prompt <審查包>`，
@@ -82,6 +82,10 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
 保留獨立修復票與編號，但在母 task 尚占用 worktree 時，修復施工是**母 task 的下一輪 worker attempt**：不 create 第二個 task、不 handoff 當修復。把修復票全文（問題、決策來源、範圍、驗收命令）附到母 task 的工單來源，兩者都放 worktree 外；`run <母 task> --key <新修復鍵>`，不帶 `--resume`。新 attempt 凍結更新工單，舊票與舊證據不改。
 
 修好後先準備新增檔，再以新 key 重跑母 task **所有曾驗過的不同命令**與 review（包含修復新增命令）；核實後 accept。母票與阻擋修復同一 commit、body 列兩個編號，然後 finalize 母 task。非阻擋跟進票可以先寫，但同 worktree 的獨立 task 施工必須等母 task finalize 釋放占用。
+
+修復輪次沿用母單累計。第 2 輪起只剩已核實的 minor 時，經理依 SKILL 第六節直接修；P1 完成 3 輪修復仍未收斂時，下一輪必須換更強且已授權的施工路徑或由經理收尾，不再派 Flash。經理收尾不另 `run`，驗收／審查／accept 的指紋護欄不變。
+
+新 task 派單前就把多項檢查寫成清單。既有 task 若已逐條 verify，Relay 仍要求所有曾驗命令的最新證據；不能改帳本、假結案或僅新增清單 verify 來抹掉舊要求。這是舊任務兼容限制，記入核實段；新 task 只登記清單入口，後續重驗維持單一 verify。
 
 收尾模式（SKILL 第六節）由經理直接改母 task 的工作樹，不另 `run`；之後一樣以新 key 重跑母 task 所有曾驗過的不同命令與 review，核實後 accept，母票與修復同一 commit。
 
