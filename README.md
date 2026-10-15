@@ -42,6 +42,7 @@ Cursor、ZCode 不當技術長：等待、交接與施工中問答都只在 Clau
 - **Codex 技術長改用 5 分鐘 sleep**：原生 `sleep` 5 分鐘，醒來用 `osrelay wait --owner <owner> --timeout 0` 一次查完同 owner 所有鏈；有事件時叫醒會提前結束 sleep，叫醒壞了 sleep 仍保底。起因是 1 秒 yield 輪詢讓等待佔了 token 四到五成。
 - **`osrelay wait --owner`**：一次看同 owner 所有 attempt，回報還沒回報過的結束、待答題目、靜默與叫醒失敗；退出碼同單一 `wait`，另有 `idle: true` 表示沒有進行中的工作。
 - **收尾模式**：剩不超過 3 張小單，或上線後使用者在旁實測的調整期，技術長說一聲「剩 N 項，改我自己做」就自己改；修前補驗、驗收重跑、外部審查與逐張提交照舊，秘密、權限、錢與對外契約仍走 junior。
+- **SKILL 瘦身與接手最小讀取**：SKILL.md 從約 44KB 減到約 22KB，只留會影響「下一步准不准做」的規則，細節移到 `docs/`（workers、discovery、tickets、acceptance、review、remediation、closeout），做那個動作前才讀。換 session 時後繼只讀交接檔與該段要用的章節，長 notes 只查需要的段落；context 到 50% 先寫交接、60% 不再開新一輪。
 - **審查收斂與單一驗收入口**：第 2 輪起只剩 minor 由技術長直修；P1 修 3 輪未收斂改派更強施工者或技術長收尾，不再派 Flash。多項驗收寫成清單，用 skill 的 `scripts/acceptance-run.sh` 跑成一條 verify；驗收工具每條鏈最多一張單，之後工具問題由技術長直修、只做 code-review。
 - **junior 遵循 YAGNI**：工人 prompt（`templates/worker-prompt.md`，pi、ZCode、Haiku 共用）要求只做工單要求的事，優先最小、最直接的解法（一行能解決就不寫十行），不加工單沒要求的抽象、選項、相容層或防禦碼；但不為了縮短犧牲可讀性、錯誤處理或驗收。這條只給 junior，技術長不受限。
 - **pi junior 改走 RPC 驅動程式**：`scripts/pi-worker-driver.py` 以 `pi --mode rpc` 啟動 pi，取代原本整輪結束才輸出的 `-p` 文字模式。驅動程式負責即時進度、轉接發問，並照文字模式判斷成敗（模型出錯時 pi 自己仍回 0，驅動程式改回 exit 1）；訊號轉送、父程序死掉 pi 跟著收尾、Relay 的 worktree 鎖都照舊。

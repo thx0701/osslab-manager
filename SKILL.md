@@ -19,53 +19,33 @@ notes: >-
 
 # 工單托管（OSSLab manager）
 
-只在使用者要求托管時使用。經理是目前這則 session 的 bot，只支援 Claude Code 與 Codex（ZCode 只當工人備援與 GLM 審查，Cursor 不做工單托管），負責盤點、拆單、派單、驗收、核實與提交；人決定未定的業務規則。實作交給工人，經理不親自寫實作碼（驗收不過時也不偷偷修，開跟進單；例外只有第二節的經理驗收工具，與第六節的經理直修、收尾模式）。兩種經理都在背景派工與派審查、照第三節第 4 點的等法等完才收，不留未等待的調用、不用 nohup／`&` 脫離。施工只准本 skill 的 helper CLI（見「規矩」）。skill 檔與 scripts 走共用掛載 `~/.agents/skills/osslab-manager/`：Codex 直接掃 `~/.agents/skills`，Claude Code 的 view 是指向同一實體的 symlink。**Codex 經理在 Paseo 要用 Full Access（`auto-review` 模式網路受限，派工一定會被擋），推理固定 medium，goal 裡也不升 xhigh。**
+只在使用者要求托管時使用。經理是目前這則 session 的 bot，只支援 Claude Code 與 Codex（ZCode 只當工人備援與 GLM 審查，Cursor 不做工單托管），負責盤點、拆單、派單、驗收、核實與提交；人決定未定的業務規則。實作交給工人，經理不親自寫實作碼（驗收不過時也不偷偷修，開跟進單；例外只有第二節的經理驗收工具，與第六節的經理直修、收尾模式）。派工與審查都在背景跑，照第三節第 4 點的等法等完才收，不留未等待的調用、不用 nohup／`&` 脫離。施工只准本 skill 的 helper CLI（見「規矩」）。skill 走共用掛載 `~/.agents/skills/osslab-manager/`：Codex 直接掃 `~/.agents/skills`，Claude Code 的 view 是指向同一實體的 symlink。**Codex 經理在 Paseo 要用 Full Access（`auto-review` 模式網路受限，派工一定會被擋），推理固定 medium，goal 裡也不升 xhigh。**
+
+細節在 docs，做那個動作前才讀：[workers](docs/workers.md)、[discovery](docs/discovery.md)、[tickets](docs/tickets.md)、[waiting](docs/waiting.md)、[manual-dispatch](docs/manual-dispatch.md)、[acceptance](docs/acceptance.md)、[review](docs/review.md)、[remediation](docs/remediation.md)、[closeout](docs/closeout.md)、[handoff](docs/handoff.md)、[relay](docs/relay.md)。
 
 | 角色 | 執行者 | 呼叫 |
 |---|---|---|
-| 施工（預設） | pi CLI 在本機以 RPC 無頭模式執行，由 `scripts/pi-worker-driver.py` 驅動：事件濃縮成一行一筆即時寫進 log、成敗照文字模式判斷；工人可用 `ask_manager`（`scripts/pi-ask-manager.ts`）在施工中問經理，Relay 派工才有通道（見第三節）；模型 `deepseek-v4-1-flash` 走 RunInfra（按量計費，思考 `high`）；精簡啟動，不載入 skill、上層 AGENTS.md 與擴充 | `scripts/pi-runinfra-worker.sh [--resume <接續鍵>] <workdir> <ticket>` |
-| 施工（同一模型、舊供應商，只在指定時） | 同上，改走 OpenRouter。不在自動退路裡，使用者指定才用，參數相同 | `scripts/pi-openrouter-worker.sh [--resume <接續鍵>] <workdir> <ticket>` |
-| 施工（備援） | ZCode CLI 在本機以 yolo 模式執行；模型 `GLM-5.3-Flash` 走雲端（BigModel Coding Plan 訂閱，思考預設 Max） | `scripts/zcode-cloud-worker.sh [--resume <接續鍵>] <workdir> <ticket>`（不接續，一律從零） |
-| 施工（指定） | Claude Code 無頭；模型 `claude-haiku-5-5`、effort `high`，走本機 Pro 訂閱。不載入 skill。啟動事件的模型不符或改走 API key 就失敗 | `scripts/claude-haiku-worker.sh [--resume <接續鍵>] <workdir> <ticket>`（不接續，一律從零；Relay 不路由，見下方選工人） |
-| 審查（第一順位） | Codex 唯讀沙箱，`gpt-6-astra`，reasoning effort `medium`：shell 只能讀、不能寫、沒有網路，不載入本機 Codex 設定與 MCP，登入沿用本機 ChatGPT 帳號（和 Codex 經理共用額度） | `scripts/codex-readonly-review.sh <workdir> <prompt-file>` |
-| 審查（第二順位） | ZCode，完整 `GLM-5.3`，思考 `max`，只給 Read／Grep | `scripts/zcode-readonly-review.sh <workdir> <prompt-file>`；見 [docs/glm-review.md](docs/glm-review.md) |
-| 審查（第三順位） | Grok Build，`grok-4.7`，reasoning effort `medium`，只給 Read／Grep；已停訂，到期前可用 | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
-| 等待（工具） | 阻塞到 pid 結束，只印一行 | `scripts/wait-worker.sh <pid\|worker.log\|review.err> <max_seconds>` |
-| 收屍備份（工具） | 保存 binary patch 與未追蹤檔，核對後才准人工清理 | `scripts/backup-worktree.sh <workdir> <全新備份目錄>` |
-| 證據（工具） | 跑一條命令，完整輸出與 JSON 信封存檔，stdout 只印摘要 | `scripts/evidence-run.sh <out-dir> <label> -- <命令…>` |
-| 驗收（工具） | 照清單依序跑多項檢查，逐項留 log 與 exit code，任一失敗整體非零 | `scripts/acceptance-run.sh <repo 外輸出目錄> <清單>` |
+| 施工（預設） | pi＋`deepseek-v4-1-flash`（RunInfra），Relay 派工時可施工中發問 | `scripts/pi-runinfra-worker.sh [--resume <接續鍵>] <workdir> <ticket>` |
+| 施工（只在指定時） | 同上，改走 OpenRouter | `scripts/pi-openrouter-worker.sh [--resume <接續鍵>] <workdir> <ticket>` |
+| 施工（備援） | ZCode＋`GLM-5.3-Flash`（Coding Plan） | `scripts/zcode-cloud-worker.sh <workdir> <ticket>`（一律從零） |
+| 施工（只在指定時） | Claude Code＋`claude-haiku-5-5`（本機 Pro 訂閱）；Relay 不路由 | `scripts/claude-haiku-worker.sh <workdir> <ticket>`（一律從零） |
+| 審查（第一順位） | Codex 唯讀，`gpt-6-astra` medium | `scripts/codex-readonly-review.sh <workdir> <prompt-file>` |
+| 審查（第二順位） | ZCode 完整 `GLM-5.3` max，只給 Read／Grep | `scripts/zcode-readonly-review.sh <workdir> <prompt-file>` |
+| 審查（第三順位） | Grok Build `grok-4.7` medium，已停訂，到期前可用 | `scripts/grok-readonly-review.sh <workdir> <prompt-file>` |
 
-路由已由本安裝定好，不重新摸工人、不另寫 `workers.md`。helper 不用本機自架模型 provider；憑證只從既有 secret 檔載入（`glm-5.3-flash.env`、`openrouter.env`、`glm-coding-plan.env`），不進 argv／log／git。要換模型或工具先問人，再改本 skill 開 PR。
+工具：`scripts/wait-worker.sh`（等 pid 結束）、`scripts/backup-worktree.sh`（收屍備份）、`scripts/evidence-run.sh`（一條命令的輸出與指紋信封）、`scripts/acceptance-run.sh`（照清單跑多項檢查）；參數見 `docs/workers.md` 角色表。
 
-**選工人**：預設 DeepSeek，供應商是 RunInfra（2026-10-04 單輪對照：同一模型的工具第一跳與當時的 OpenRouter 相近或略快、長輸出約快 4～5 倍；OpenRouter 腳本保留）。RunInfra 是針對 agent 工作負載優化的託管服務（同一 session 的呼叫送到已有快取的副本），速度與費用結論只對它成立。2026-10-11 對 Claude Haiku 5.5 的實測見 [docs/benchmarks/2026-10-11-deepseek-vs-haiku.md](docs/benchmarks/2026-10-11-deepseek-vs-haiku.md)。遇到下列情況直接改派 GLM-5.3-Flash 備援（`zcode-cloud-worker.sh`，Relay 是 `--engine glm`），並在 `claimed-by` 與工單「重派」寫實際引擎和原因：RunInfra 暫停、503、啟動失敗、API 錯誤、額度或速率限制；同一張單 DeepSeek 驗收不過且原因像是模型能力；使用者指定。OpenRouter 的同一支 DeepSeek 不在自動退路裡，使用者指定才用。RunInfra 額度用完時另外告訴使用者，要不要調高上限由使用者決定。
-Claude Haiku 只在使用者指定時派（`claude-haiku-worker.sh`），不插入上面的自動改派。它吃本機 Claude Pro 額度，和 Claude 經理共用同一個訂閱窗口。經理為 Claude 時，核實段註明同系施工；審查照第五節的順位。`osrelay` 的施工引擎只有 pi／glm，已有 Relay 任務的 worktree 不要改用這支手動派。
-程式碼與工單內容會送到該工人的模型供應商（RunInfra／DeepSeek，備援是 BigModel，使用者指定時是 OpenRouter／DeepSeek，指定的 Haiku 是 Anthropic 訂閱），工單照舊不寫秘密。
+路由已定，不另寫 `workers.md`；換模型或工具先問人，再改本 skill 開 PR。憑證只從既有 secret 檔載入，不進 argv／log／git。**選工人**：預設 DeepSeek（RunInfra）；RunInfra 暫停、503、啟動失敗、API 錯誤、額度或速率限制，同一張單 DeepSeek 驗收不過且像能力問題，或使用者指定時，改派 GLM-5.3-Flash（Relay 是 `--engine glm`），在 `claimed-by` 與工單「重派」寫實際引擎和原因。OpenRouter 與 Claude Haiku 只在使用者指定時用。**工人隔離**：工人以乾淨環境變數啟動，但仍看得到本機檔案，「不動 prod」只靠指示；工單不寫秘密，要碰 prod 的驗證由經理在第四節自己做，給工人拋棄式測試環境並寫明哪些共用資源不准刪。細節見 `docs/workers.md`。
 
-**工人隔離的邊界**：helper 以乾淨環境變數啟動工人，不繼承經理 session 已匯出的 token 與業務憑證；但工人仍在本機跑 shell，看得到 Docker、網路與磁碟上的檔案（含 secret 檔），「不動 prod」只靠指示。pi 工人另以精簡模式啟動：不載入全域與公司 skill（含通訊與業務系統的）、擴充與 prompt 範本，每一層的 AGENTS.md／CLAUDE.md 都不自動載入（上層共用規矩可能寫著怎麼載入團隊秘密）；repo 自己的 AGENTS.md／CLAUDE.md 改由 helper 指示與工單要求它用 read 去讀，實測會照讀照做。repo 自己的規矩若本身含上層共用段落，工人讀檔時仍會看到，這由指示「不讀取、不輸出秘密」擋。2026-09-27 實測每次請求的 prompt 從約 7.3k token 降到 1.6k，工具照舊 read／bash／edit／write。zcode 備援還沒有對應的精簡開關，照舊載入。指定的 Haiku 工人用私人設定目錄，裡面只有訂閱憑證副本，跑完刪掉；並以 `--safe-mode` 不載入 CLAUDE.md、skill、hooks 與 MCP。它不讀 API key。Claude Code 回報的啟動模型不是 `claude-haiku-5-5`、收工用量不是這個模型、或認證來源是 API key，helper 直接失敗，回執不算數。這版 CLI 可能在 stderr 印 `unrecognized_model`；以 helper 退出碼和用量為準，不拿那行單獨否決。同一原因，CLI 回報的 `total_cost_usd`／`costUSD` 是用 Opus 5.5 價格算的（2026-10-11 實測，`costBasis: unknown`），不能當 Haiku 費用，要算費用用 token 數乘官方價格。CLI 有時會在 `init` 前先送 `ui_invalidate` 之類的 system 事件，helper 會略過（最多 20 個），`init` 前出現其他事件仍拒絕。權限是 `bypassPermissions`（對齊 zcode 的 yolo），不 commit 仍靠工單指示。所以工單不寫秘密或 secret 路徑；凡要碰 prod 的驗證（唯讀煙霧、XML-RPC、瀏覽器）由經理在第四節自己做；給工人拋棄式測試環境，並寫明哪些共用資源不准刪。
-
-OSSLab 開發順序照舊：`develop → implement → verify-change → code-review`；外部審查是 code-review 內的獨立意見，不取代它。本文提到的 `grill-with-docs`、`grill-me`、`to-spec`、`to-tickets`、`verify-change`、`code-review` 是配套 skill；host 沒有時，改用工單的驗收命令與預期輸出、第四～六節的重跑與核實收斂，閘門不因缺 skill 而省略。工人不 commit、不 push、不動 prod、不挪工單。可行時給工人獨立 git worktree；不把工人派進別人正在用的髒 checkout。
+開發順序照舊：`develop → implement → verify-change → code-review`；外部審查是 code-review 內的獨立意見。配套 skill 不在時改用工單驗收命令與第四～六節的重跑與核實，閘門不省。工人不 commit、不 push、不動 prod、不挪工單；可行時給工人獨立 git worktree，不派進別人正在用的髒 checkout。
 
 ## Relay 執行路徑（Codex／Claude Code 經理）
 
-已安裝 `osrelay` 的主機（Paseo 上或一般終端機皆可），Codex 或 Claude Code 當經理時，托管先讀 [docs/relay.md](docs/relay.md)，由 Relay 保管派工、等待、恢復與交接；本 skill 仍負責決策、驗收與提交。Relay 的施工 helper 是 pi、glm，審查 helper 依序是 codex、glm、grok。Claude Haiku 不在這張引擎表裡。Relay 不開經理 session；attempt 結束或工人發問時，會經 Paseo 叫醒該 owner 最近一次 `bind` 的 session（Codex 預設開、Claude 預設關，見 `docs/relay.md`）。自動開下一段只有 Paseo 的 `create_agent`（第九節、`docs/handoff.md`）。
-
-Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID 等待、收屍與換段程序改用該文件的 CLI 操作，不混用兩套派工。其餘工單品質、依賴、核實與權限規則照舊。未安裝 Relay 的 host 仍用下文原流程；已存在 Relay 任務而 runner 不可用時先恢復 runner，不另走 helper 重派。
+已安裝 `osrelay` 的主機（Paseo 上或一般終端機皆可），由 Relay 保管派工、等待、恢復與交接，本 skill 負責決策、驗收與提交；依要做的操作讀 [docs/relay.md](docs/relay.md) 的對應章節（開頭有索引）。Relay 的 SQLite 是執行狀態正本，下文的目錄搬移、手動 PID 等待、收屍與換段都改用 Relay CLI，不混用兩套派工；已有 Relay 任務而 runner 不可用時先恢復 runner，不另走 helper 重派。施工引擎只有 pi、glm，審查依序 codex、glm、grok。工作樹一變，舊 review 就不算數；accept 後仍要自己 commit，再 `finalize`。attempt 結束或工人發問時，Relay 經 Paseo 叫醒該 owner 最近一次 `bind` 的 session（Codex 預設開、Claude 預設關）；Relay 不開經理 session，自動開下一段只有 Paseo 的 `create_agent`（第九節）。未安裝 Relay 的 host 用下文手動流程。
 
 ## 〇、現況盤點（先量再問）
 
-使用者問「完工了嗎」「做到哪了」「幫我補完」，或經理還不清楚系統現況時，先盤點再拆單。拿著交接檔接手的 session 看交接檔就算清楚現況（第九節；接手信任規則在 `docs/handoff.md`），不因接手重盤。盤點是經理自己的活，不派工人。
-
-1. **完成度正本**：找規格的狀態表、較新的 handoff spec（常取代舊裁決）、各 feature spec 的狀態行，再對照程式與 `git log`。文件常落後程式（做完了仍寫待實作），也可能超前；兩邊不一致就是文件漂移，記進缺口表。
-2. **跑所有既有測試層並對帳**：框架實際跑了幾個 vs 檔案裡定義幾個，連案例身分一起核——全綠但沒選中該驗的新場景不算通過。沒註冊進框架的、要直接執行的獨立腳本、被環境卡住的，都找出來另外跑。環境卡住（例如 PDF 渲染自鎖）先處理環境，不要把環境問題當產品缺陷。
-3. **唯讀查 prod**（在授權範圍內）：部署版本或 deploy tag 是否等於 master、執行期事實（最後同步時間、排程、系統參數、實際寄件人等）。
-4. **每個紅燈分類**，附 commit 時序證據：
-   - 產品缺陷；
-   - 測試過時（產品後來改、測試沒跟上——看兩邊最後修改的 commit）；
-   - 環境問題（缺欄位、缺參數、測試基礎設施）；
-   - 規則未定或契約互相矛盾（回第一節）。
-5. **缺口表**：已完成／部分完成／缺／待人決定，每列附命令與原樣輸出，交使用者選範圍。先量再問，不要在量之前問「要做什麼」。
-
-盤點建的臨時環境（拋棄式 DB、容器、網路）記下名稱，後續工單直接引用；整批工作收尾時再清。
+使用者問「完工了嗎」「做到哪了」「幫我補完」，或經理還不清楚現況時，先盤點再拆單；拿著交接檔接手的 session 看交接檔就算清楚現況，不因接手重盤。盤點是經理自己的活，不派工人：找完成度正本、跑所有既有測試層並對帳、在授權內唯讀查 prod、每個紅燈分成產品缺陷／測試過時／環境問題／規則未定，最後交出每列附命令與原樣輸出的缺口表，由使用者選範圍。先量再問。做法見 `docs/discovery.md`。
 
 ## 一、派單前：決策就緒
 
@@ -79,73 +59,48 @@ Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID �
 
 ## 二、寫工單
 
-照 `templates/ticket.md` 寫到作業目錄 `_tickets/open/T<編號>-<短名>.md`：
+照 `templates/ticket.md` 寫到 `_tickets/open/T<編號>-<短名>.md`；完整寫法見 `docs/tickets.md`。
 
-- 一張單只做一件事；幾條命令說不清驗收就拆開。反過來，同一原因、同一批檔案的小幅對齊（例如數個過時斷言）合成一張單——判準是一組驗收命令證明得了、一次審查看得完。
-- 驗收寫命令與預期輸出，並寫「為什麼這樣驗收」——防止測試沒斷言卻過關。
-- **起點要失敗**：會改變行為的單（修 bug、新增或改變功能），至少一條驗收命令在起點 commit 會失敗，而且失敗原因是這張單要改的行為，不是驗收命令本身（測試檔、腳本、指令）不存在；全新 repo 或新工具因實作還不存在而失敗也算。派單前經理在起點跑一次，把命令、exit code 與關鍵輸出寫進工單；起點就會過的命令只算回歸保護，不算完成證據。驗收測試要由工人新寫時（全新 repo 常是這樣），工單寫「第四節補驗」，改在驗收時補，並逐項確認工人的斷言檢查的是實際值。不改行為的單（重構、文件、命名、不動斷言的測試對齊）免除，工單寫一句理由。
-- 驗收命令優先引用 repo 既有的測試腳本；環境陷阱寫進腳本或盤點筆記，不要每張單複製長命令。同一串命令要寫第三次時，先開一張單把它做成腳本。
-- **多項驗收一律用標準腳本**：一張單有 2 條以上必要檢查，就寫成一份清單（repo 內 `tools/acceptance/<工單名>.txt`，每行 `id: 命令`），派單前和工單一起提交；工人、經理與 Relay `verify` 都只跑這一條：`bash ~/.agents/skills/osslab-manager/scripts/acceptance-run.sh <repo 外的輸出目錄> tools/acceptance/<工單名>.txt`。它依序跑完每一項（失敗也續跑）、逐項留 log 與 exit code、任一失敗整體非零。repo 已有一條命令就涵蓋全部檢查的 runner 時直接用它。經理不自寫聚合 runner、契約雜湊、刪項反例之類的後設基礎設施。修復途中檢查增加，就在清單加一行。
-- 工單引用的工具或腳本必須是**已提交**的版本：派單前確認它沒有未提交修改，也沒有進行中的工單正在改它（含其他 worktree 的路徑）。做不到就等改它的那張單提交後再派，或在工單寫明用 `git show <commit>:<path>` 取出的固定版本。
-- **經理驗收工具**：經理為驗收寫的量測、探針、overlay、UI 驅動，派單前先提交進 repo（放 `tests/` 或 `tools/`，單獨一個 commit，body 寫「經理驗收工具」），工單驗收直接呼叫它，工人跑同一支；不要留在 `~/.local/state/`，那裡工人拿不到，只能拿自製小資料自測全過。經理能提交的只有驗收腳本、輸出 schema 與 fixture；產品碼、既有斷言照舊走工人。這些 commit 落在第八節整批 `code-review` 範圍內。**驗收工具從簡**：只寫本單現在要跑的檢查，不預先登記還沒派工的單；一條鏈最多開 1 張驗收工具單，之後要補檢查，或工具本身跑不起來（缺依賴、路徑、參數、權限、容器掛載），經理直接修、同一入口重跑，commit body 寫「經理直修：驗收工具」，不另開單、不跑外部審查（只做 `code-review`）；但已跑過 review 的 Relay task，工作樹一變就要照 Relay 閘門重跑一輪 review 才能 accept（整份 diff 一起審）。驗收工具花的時間超過產品施工時，主動告訴使用者。
-- 邊界寫明：只准動哪些檔、決策來源、回執路徑 `_receipts/<工單名>.receipt.md`、哪些共用資源不准刪。
-- 寫兩張派一張；下一張常取決於上一張回執的存疑項。
-- 每張在 `blocked-by` 寫前置工單，沒有寫「無」。前置單要在本 worktree 的 base 已有它的 commit 才算解除；它在別的 worktree 提交的，先 rebase 或 merge 進來再派。目錄就是狀態（`open`／`doing`／`done`），不另加狀態欄。
-- 需求已走過 `to-tickets`：沿用它的切法與依賴，把票改寫進本 skill 模板——依賴寫進 `blocked-by`，`Verification` 當驗收起點，補到命令與預期輸出才派；`Status` 欄丟掉（目錄就是狀態），補上邊界、回執路徑等欄位。一組驗收命令說不清的票再拆，子單的 `blocked-by` 標回原單。
+- 一張單只做一件事，驗收寫命令、預期輸出與「為什麼這樣驗收」。
+- **起點要失敗**：會改變行為的單，至少一條驗收命令在起點 commit 會失敗，而且失敗原因是這張單要改的行為；派單前經理在起點跑一次，寫進工單。要靠工人新寫的測試才分得出時寫「第四節補驗」；不改行為的單寫一句免除理由。
+- **多項驗收一律用標準腳本**：一張單有 2 條以上必要檢查，就寫成一份清單（`tools/acceptance/<工單名>.txt`，每行 `id: 命令`）跟工單一起提交，工人、經理與 Relay `verify` 都只跑 `bash ~/.agents/skills/osslab-manager/scripts/acceptance-run.sh <repo 外的輸出目錄> tools/acceptance/<工單名>.txt`。repo 已有一條命令涵蓋全部檢查的 runner 時直接用它。經理不自寫聚合 runner、契約雜湊、刪項反例之類的後設基礎設施。
+- **經理驗收工具**：量測、探針、UI 驅動派單前先提交進 repo（body 寫「經理驗收工具」），工人跑同一支；產品碼與既有斷言照舊走工人。**驗收工具從簡**：只寫本單現在要跑的檢查，不預先登記還沒派工的單；一條鏈最多開 1 張驗收工具單，之後補檢查或工具跑不起來由經理直接修（commit body 寫「經理直修：驗收工具」），不另開單、不跑外部審查（只做 `code-review`；已審過的 Relay task 仍照閘門重審）。驗收工具花的時間超過產品施工時，主動告訴使用者。
+- 引用的工具必須是**已提交**版本；寫明只准動哪些檔、決策來源、回執路徑、哪些共用資源不准刪；`blocked-by` 寫前置單（沒有寫「無」）；寫兩張派一張。
 
-**拆單要不要人核**：人管範圍，經理管粒度。
-
-- 範圍只核一次：盤點缺口表或使用者原始指示選定的範圍就是授權範圍，不重問。
-- 粒度不等人核：派第一張前貼**確認清單**給使用者看，貼完直接開派（沉默不必等「好」，但也不當成新的授權）。清單要貼在對話裡；已核准的規格、goal 的 note 都不能取代，使用者要看的是這批實際拆出來的單：
-  1. 做什麼：這批的目標一句話；
-  2. 不做什麼：授權範圍外、看起來相關但這批不碰的東西，至少一條；
-  3. 怎麼算完成：使用者看得到的完成訊號，對應到哪幾條驗收命令；
-  4. 拆單清單：Title／chain／git worktree／blocked-by／驗收命令。同一條鏈共用一棵 git worktree，施工與驗收交替。`blocked-by` 為「無」且檔案不重疊的，各開一棵 worktree，才准同時派。
-  「不做什麼」寫不出來，代表範圍還沒對齊，回第一節問人，不開派。後面的單正文可以晚點寫細，確認清單仍要有 Title、chain、git worktree、blocked-by；驗收命令照舊寫兩張派一張，沒寫清的不派。使用者插話照「規矩」判斷。每張工單 header 寫 `chain` 與 `git-worktree`，跟進單沿用母鏈名。
-- 只在這三種情況停下等人：拆單超出授權範圍（順手改別的模組、多修一個 bug）；要決定分開 PR 或分批部署；遇到未定的業務規則（回第一節）。
-- 範圍內的跟進單、修復單、切太大拆出的子單都不再問。
+**拆單要不要人核**：人管範圍，經理管粒度。範圍只核一次；派第一張前貼**確認清單**（做什麼、不做什麼、怎麼算完成、拆單清單：Title／chain／git worktree／blocked-by／驗收命令），貼完直接開派。「不做什麼」寫不出來就回第一節問人，不開派。
+- 只在這三種情況停下等人：超出授權範圍；要決定分開 PR 或分批部署；遇到未定的業務規則。範圍內的跟進單、修復單、子單不再問。
 
 ## 三、派單
 
-派第一張前，第二節的確認清單必須已經貼在對話裡；沒貼不派。
+派第一張前，確認清單必須已經貼在對話裡；沒貼不派。
 
-1. `mv` 到 `_tickets/doing/`（挪成功＝上鎖），派出後由經理照 `worker.log` 起跑行的 `engine=` 與 `at=` 填 `claimed-by`（`引擎 @ 時間`），不自己抄模型名；helper 的 `at=` 已是台灣時間，主機時鐘是 UTC，別用裸 `date`。
-2. 背景執行 helper（一張單常跑一分鐘到數十分鐘）。派工指令、attempt 目錄、`helper exit=<n>` 收尾行、`--resume <接續鍵>` 何時可帶、凍結 skill 副本的做法：照 [docs/manual-dispatch.md](docs/manual-dispatch.md) 第 1 節，不自己改寫指令。
-3. 同一個 worktree 一次只派一張；不同 worktree 可以平行跑不同工單鏈。只派 `blocked-by` 已解除的單。一條鏈的 review 要等該 worktree 沒有進行中的工人或 verify；這時另一條鏈可以在自己的 worktree 上施工。
-4. **一次等到底**：等待中不跑 `ps`、`git status`、不看 log，也不用 10 秒以下的輪詢——每次探詢都是一整輪經理推理，外加重送整個 context。完成信號依 host 而定，審查員與長測試也照這樣派、照這樣等：
+1. `mv` 到 `_tickets/doing/` 上鎖，照 `worker.log` 起跑行的 `engine=` 與 `at=` 填 `claimed-by`。
+2. 背景執行 helper；指令、`helper exit=<n>` 收尾行與 `--resume <接續鍵>` 規則照 [docs/manual-dispatch.md](docs/manual-dispatch.md) 第 1 節，不自己改寫。
+3. 同一個 worktree 一次只派一張，只派 `blocked-by` 已解除的單；一條鏈的 review 等該 worktree 沒有進行中的工人或 verify。
+4. **一次等到底**：等待中不跑 `ps`、`git status`、不看 log、不短輪詢——每次探詢都是一整輪經理推理。審查員與長測試也照這樣等：
    - Claude Code：背景執行，等 host 的完成通知（wait-worker.sh 只作 fallback）。
-   - Codex：原生 `sleep` 5 分鐘（`duration_ms` 300000），醒來一次查完同 owner 的所有鏈（Relay 是 `osrelay wait --owner <owner> --timeout 0`；手動派工見 `docs/waiting.md`），還有在跑就再 sleep。不用 1 秒 yield 的 code-mode cell，也不用 1 分鐘以下的 sleep 輪詢。Relay 叫醒會提前結束 sleep、在同一輪處理；叫醒壞了，5 分鐘 sleep 仍保底。還有工作在跑就不結束這一輪（`/goal` 會在閒置時自動續跑）。Codex `/goal` 自己續跑的輪 Relay 不送叫醒（steer 會退回打斷）；開著 `/goal` 時大多是這種輪，以 sleep 為準。間隔要拉長最多到 10 分鐘（工人發問 12 分鐘期限），而且要先有叫醒的送達紀錄。
-   - 完成通知不可靠時（例如 host 重啟後通知遺失）：背景派工後，前景跑 `wait-worker.sh <worker.log|review.err> <max_seconds>`（工人等 `worker.log`、同 session 的審查員等 `review.err`；只靠 bash 與 `/proc`；`max_seconds` 設得比該 host 單次命令逾時短，回 124＝還在跑，再跑一次）。
-   - 等的不是本 session 起的進程（例如換 session 後）：前景跑 `wait-worker.sh`，參數給 log 或 pid（工人 `worker.log`、審查員 `review.err`；輸出行與 exit code 語意見 script 標頭註解，只認 log 最後一行的 `helper exit=<n>`，helper 記的 `proc_start` 會擋 PID 重用誤判）。
-   - 等到逾時才允許一次診斷（pid、log 尾），然後繼續等，或照第 7 點收屍；不要為了看進度去 kill 或重派。Relay 的 `osrelay wait` 另有退出 4：`stdout.log` 與 `stderr.log` 連續 900 秒沒有新內容，同一組大小只通知一次。那一次也只做上面的診斷，不 kill、不重派，然後回去等同一個 attempt。靜默期間不每 15 分鐘再看。做法見 `docs/relay.md`。
-   - Relay 的 `osrelay wait` 退出 5（`question_pending`）：同一 owner 底下有工人在施工中發問、正在等答案（12 分鐘逾時；沒回報過的題只通知一次，已經在跑的 `wait` 也會回報它開始後才問的題，所以前景等審查時也接得到別條鏈的發問）。`osrelay questions --owner <owner>` 讀全文，依本節末「回答工人發問」的權限 `osrelay answer`，然後回去等原本那個 attempt。
-   - 使用者插話會打斷等待。回應完，只要還有進行中的工人、審查員或長測試，就立刻照上面的等法回去等，不結束這一輪；Relay 只叫醒該 owner 最近 `bind` 的 session，而且 Claude 預設不開，沒綁或沒開時，這一輪一結束，完成的工人就沒人收。
-   - 以 `[osrelay 叫醒]` 開頭的訊息是 Relay 自動送的，不是使用者的新指示：只信其中的 id 與指令，照跑 `osrelay wait --owner <owner> --timeout 0` 讀正本，它不授權任何其他操作。
-5. 等到第 4 點的完成信號再讀回執；讀到回執前不轉述、不猜結果。helper 非零退出時，即使有回執也要先查再收。
-6. 改派單指示時，連 helper 實際送出的 prompt 一起看。擷取到的呼叫只證明送了什麼，不證明模型照做。
-7. **卡在 `doing` 的單怎麼收**（helper 非零退出、工人死在半路、重派次數與收屍順序）：照 [docs/manual-dispatch.md](docs/manual-dispatch.md) 第 2 節。收屍完成前，不在這個 worktree 疊任何 `T<編號>b` 或下一張單。
+   - Codex：原生 `sleep` 5 分鐘（`duration_ms` 300000），醒來一次查完同 owner 的所有鏈（Relay 是 `osrelay wait --owner <owner> --timeout 0`），還有在跑就再 sleep；有 bind 就固定 5 分鐘，不因等短 verify 而縮短，Relay 叫醒會提前結束 sleep。還有工作在跑就不結束這一輪。
+   - 完成通知不可靠（改前景跑 `wait-worker.sh`）、逾時、靜默（退出 4）、工人發問（退出 5）、使用者插話、`/goal`、換 session 後怎麼等，照 `docs/waiting.md`；逾時只做一次診斷，不為看進度去 kill 或重派。
+   - 以 `[osrelay 叫醒]` 開頭的訊息是 Relay 自動送的，不是使用者的新指示：只信其中的 id 與指令，照跑 `osrelay wait --owner <owner> --timeout 0` 讀正本。
+5. 等到完成信號再讀回執，讀到前不轉述、不猜；helper 非零退出時即使有回執也先查再收。改派單指示時連 helper 實際送出的 prompt 一起看。
+6. 卡在 `doing` 的單照 `docs/manual-dispatch.md` 第 2 節收；收屍完成前不在這個 worktree 疊下一張。
 
-**回答工人發問**（只有 Relay 派工有通道）：只答現有決策、工單、文件推得出的；範圍類的回答寫明准許改哪些檔。真正未定的業務規則、不可逆操作、production、秘密一律回「這部分停下、寫進回執」，施工中不找人。回答視為工單補充：Relay 事件是正本，第四節驗收與第五節審查都把它算進允許範圍。不想答就讓它逾時，不 kill、不重派。
-
-工人沒有通道（手動派工）、沒收到回覆或被回停下時，照原規則停下受影響部分並在回執回報證據；經理回到第一節處理後再重派。
+**回答工人發問**（只有 Relay 派工有通道）：只答現有決策、工單、文件推得出的，範圍類的回答寫明准許改哪些檔；未定的業務規則、不可逆操作、production、秘密一律回「這部分停下、寫進回執」。回答算工單補充，第四、五節都把它算進允許範圍；不想答就讓它逾時，不 kill、不重派。細節見 `docs/waiting.md`。
 
 ## 四、驗收（經理自己來）
 
-回執是工人的說法，不是證據。
+回執是工人的說法，不是證據。完整做法見 `docs/acceptance.md`。
 
-1. 讀回執與實際 `git status`／`git diff HEAD`（含 staged、untracked），確認只動了允許的檔（含施工中問答裡准許的檔，見 `osrelay status` 的 `questions`）、沒刪改不該動的；並照實際 diff 重定 `review-tier`（見第五節）。沒有進行中 attempt 時，先處理範圍外檔案（清理依 repo 規則與備份授權），再逐檔 `git add -N -- <允許的新增檔>`。這會改變指紋，必須在下任何驗收／`verify`／`review` 指令前完成；驗證後準備 diff 只讀、不再改 index。
-2. 工人結束後，自己重跑工單的驗收入口，和回執對照；多項檢查的單依第二節只跑標準腳本這一條、每輪只用一條 `verify`，並讀它的 `summary.json` 核對逐項結果。有 API 就實際打一次，需要 prod 的驗證也在這裡由經理做。重跑範圍就是工單列出的命令：每張單的 `verify-change` 跑工單命令與受影響的 targeted 測試，不含全量；全量（多片、manifest、hash 對帳）整批只在第八節收尾跑一次，不為單張驗收重組全量或複製 runner。
-3. 工單寫「第四節補驗」時，在起點開一棵拋棄式 worktree，只放進工人新增或修改的測試檔，跑同一條驗收命令（跑完移除）：必須失敗，且原因是本單要改的行為。起點仍過，代表驗收分辨不出改動，不算通過，照第 5 點處理。
-4. 讀存疑項並處理。
-5. 不過：契約已定 → 寫跟進單 `T<編號>b` 再派；預期結果未定 → 回第一節。
+1. 讀回執與實際 `git status`／`git diff HEAD`（含 staged、untracked），確認只動了允許的檔，照實際 diff 重定 `review-tier`；下任何驗收／`verify`／`review` 指令前，先 `git add -N` 允許的新增檔。
+2. 自己重跑工單的驗收入口，和回執對照；多項檢查跑標準腳本、讀 `summary.json` 核對逐項。需要 prod 的驗證也在這裡由經理做。單張只跑工單命令與受影響的 targeted 測試，全量整批在第八節跑一次。
+3. 工單寫「第四節補驗」時，把工人新寫的測試放回起點跑：必須失敗，且原因是本單要改的行為；起點仍過就不算通過。
+4. 讀存疑項並處理。不過：契約已定 → 寫跟進單 `T<編號>b` 再派；預期結果未定 → 回第一節。
 
-輸出很長的驗收命令用 `scripts/evidence-run.sh <out-dir> <label> -- <命令…>` 包起來：完整 log 與 JSON 信封（cwd、命令、命令 exit、wrapper exit、起訖時間、執行前後的 HEAD／diff／untracked 指紋）存到工單狀態目錄（[docs/manual-dispatch.md](docs/manual-dispatch.md) 第 1 節的 `$D`），同名不覆蓋。只有 wrapper exit=0、JSON 存在且 `verification_status=passed` 才算通過；證據失敗或執行前後指紋不同不得驗收。版本變動先查原因，固定受驗版本後重跑；被 ignore 的檔、submodule 內部內容與外部環境不在指紋範圍。schema 2 保留原頂層版本欄位作為結束快照，完整版本在 `before`／`after`。通過時對話與審查包只引用 JSON 路徑和 exit code，失敗才讀它印的最後 20 行——通過的長 log 讀進對話，之後每一步都要重送。同一串命令寫到第三次、或驗收本身是多片全量時才用；短命令照舊直接跑。分片、manifest 這類跑法仍是各 repo 自己的 runner。
-
-最後一次實作變更後跑 `verify-change`。驗收過了還不提交，先走第五、六節審查，提交在第七節。
+長輸出的驗收用 `scripts/evidence-run.sh` 包起來，只有 wrapper exit=0、JSON 存在且 `verification_status=passed` 才算通過。最後一次實作變更後跑 `verify-change`；驗收過了先走第五、六節，提交在第七節。
 
 ## 五、唯讀外部審查（Codex → GLM → Grok）
 
-審查員依序：Codex GPT-6 Astra medium（`codex-readonly-review.sh`）→ GLM-5.3 max（`zcode-readonly-review.sh`）→ Grok（`grok-readonly-review.sh`，已停訂，到期前可用）；使用者或已定工單指定哪個就用哪個。使用者只指定某個階段（例如「規格給 GLM 審」）時，其他階段照順位，不跟著改。前一順位不能用才換下一個：helper 非零退出、啟動／認證／額度錯誤，或報告空白、缺標頭。換之前把失敗那輪的報告與 stderr 留在原 `$A`，核實段寫實際審查員與換人原因。報告內容不合意不是換人的理由，findings 照第六節核實。helper 自己不 fallback，換人由經理決定。審查員和經理或工人同一家（例如 Codex 經理配 Codex 審查、GLM 工人配 GLM 審查）時，在核實段註明「同系審查」，不稱異族。GLM-5.3-Flash 工人不變。
+審查員依序 Codex GPT-6 Astra medium → GLM-5.3 max → Grok（已停訂，到期前可用）；使用者或已定工單指定哪個就用哪個。前一順位不能用（helper 非零、啟動／認證／額度錯誤、報告空白或缺標頭）才換下一個並寫原因；報告不合意不是換人理由。同一家時註明「同系審查」。審查包、命令與證據保存見 `docs/review.md`。
 
 **審查分級**：`review-tier` 寫在工單 header，派單時先預估。
 
@@ -154,95 +109,39 @@ Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID �
 - 預估只是預估：第四節照實際 diff 重定，碰到上列任一項就升高階；只升不降，拿不準算高階。
 - 第八節 push 前的整批 `code-review` 不分級，一律照走。
 
-準備審查包：工單與決策來源（含施工中問答：題目與經理回答，屬工單補充）、回執、完整 diff（只讀凍結成檔：`git diff HEAD`；新增檔已在第四節登錄）、repo 根與固定點 SHA、驗證證據（精確命令、工作目錄、exit code、原始輸出，對應受審版本；豁免要寫理由與未驗範圍）。「測試都過了」這種摘要不算證據。
-
-把審查提示寫進檔案後，一律背景執行，照第三節第 4 點的等法等完（可與其他背景工作平行），每輪原始報告與 stderr 存在新的 `$A`；讀完將報告複製到 `_receipts/<工單名>.<attempt 名>.review.md`，核實結論追加在該份副本，原始報告保留：
-
-```bash
-# 工單狀態目錄同 docs/manual-dispatch.md 第 1 節（帶 workdir 雜湊）
-D=~/.local/state/osslab-manager/<工單名>-$(printf '%s' "<workdir>" | sha256sum | cut -c1-8)
-mkdir -p "$D" || exit $?
-A=$(mktemp -d "$D/attempt-XXXXXXXX") || exit $?
-printf 'attempt=%s\n' "$A"
-E=$A/review.err
-rc=0; bash ~/.agents/skills/osslab-manager/scripts/codex-readonly-review.sh <workdir> <prompt-file> \
-  > "$A/review.md" 2> "$E" || rc=$?
-printf '\nhelper exit=%s\n' "$rc" >> "$E"; exit "$rc"
-```
-
-換成 GLM 或 Grok 時，上面的 helper 換成 `zcode-readonly-review.sh` 或 `grok-readonly-review.sh`，等待與證據保存相同。Codex 與 GLM 的 helper 自己在報告第一行加標頭（「審查：codex / gpt-6-astra medium @ <時間>」「審查：zcode / GLM-5.3 max @ <時間>」），提示不必再要求。用 Grok 時提示要求報告第一行就是「審查：grok / grok-4.7 medium @ <時間>」，前面不加開場白；Standards、Spec、Verification 三軸分開；每條附 嚴重度｜`file:line`｜問題｜程式證據｜建議修法；沒把握標「存疑」，沒問題直說不湊數；不得改檔。告訴審查員：它是唯讀，檢查你提供的執行證據即可，自己沒重跑不算驗證失敗；但證據缺漏、過期或不足仍擋驗收，由經理補。審查員仍常在標頭前加一句開場白；內容齊全就在核實段落記一筆，不必重跑。
-
 ## 六、逐條核實
 
-審查員常看錯。每條都打開 `file:line` 對照原始碼與使用者授權：
+審查員常看錯。每條都打開 `file:line` 對照原始碼與使用者授權：成立的，一輪合成**一張**修復單派給工人；不成立的，在報告末尾寫一行理由；分清本次引入的缺陷與既有限制；移除 guard、放寬斷言要有決策來源，測試通過或審查員同意都不能決定新業務規則。核實結論追加在報告末尾，之後照常完成 `code-review`。完整條件、記帳與 Relay 做法見 `docs/remediation.md`，直修或收尾前先讀。
 
-- 成立：先按下方「第 2 輪起只剩 minor」與「P1 三輪未收斂」判斷是否由經理直修或升級施工者（收尾模式中由經理自己修，見本節末）；其餘一輪審查的所有成立項合成**一張**修復單派給工人，不要一條一單。修復單只照審查員指定的 `file:line` 與修法做、沒動到其他行為的（機械修復），驗收重跑通過後可免第二輪外部審查，但仍須對最終 diff 執行 `code-review`；其他的再跑一輪外部審查（附上一輪報告、處置、變更 hunk、新證據與完整 diff）。
-- 不成立：在報告末尾寫一行理由。
-- 分清本次引入／暴露的缺陷與既有限制；既有限制記下，不默默擴大範圍。
-- 移除 guard、放寬斷言要有決策來源；測試通過或審查員同意都不能決定新業務規則，這類回到人。
-
-核實結論追加在審查報告末尾。外部審查之後照常完成 `code-review`；修改了實作就重跑受影響的驗證與最終 diff 的 `code-review`；外部審查是否重跑依上面的機械修復條件判定。
-
-**第 2 輪起只剩 minor，經理直接修**：同一張母單從第 2 輪審查及核實後，若只剩已成立、非阻擋的 minor／nit，沒有 P0／P1、其他實際阻擋或未決設計，經理直接修，不再為這些項目派 Flash 修復單。這是收斂收尾的明確入口，不受下方一般 nit 的約 10 行、不新增檔及不改行為限制；只處理已核實問題與原工單範圍，不能把阻擋項降級成 minor。直修後重跑本單驗收並完成最終 `code-review`；Relay 仍須對目前指紋重驗／重審，不能沿用修改前證據。
-
-**同一張單的 P1 修了 3 輪仍未收斂，必須升級**：一輪是完成實際修復、重跑驗收並核實審查結果；啟動／認證失敗、只重送命令不算修復輪。以母單累計，不因改票名、換 session 或另開修復票歸零。完成第 3 輪後仍有已成立的 P1，下一輪不得再派 DeepSeek Flash 或 GLM Flash：改派已授權且有可用施工 helper 的更強施工者，或由經理用本節收尾模式接手；只換同級 Flash、供應商或提高其思考量不算升級。沒有合格的更強施工路徑時，優先由經理收尾，不把唯讀審查 helper 當工人或臨時繞過隔離。
-
-工單／核實段記錄累計修復輪次、剩餘 P1、先前驗收證據、升級去向與原因。上述 minor 收斂及 P1 升級收尾是一般「不超過 3 張小單」及排除域的明確例外：經理可修已授權工單內的錢、權限、庫存、對帳、migration 或對外契約缺陷，但仍走高階審查，不取得新的業務決策、秘密／憑證或 production 操作權限。超出原範圍或缺必要授權時依第一節處理，不能因此回派 Flash。驗證、審查與第七節母單同一 commit 的閘門不變。
-
-**經理直修（審查 nit）**：以下是尚未觸發上述兩個收斂入口的一般規則。非阻擋的成立 nit，同時符合下列全部條件，經理可以自己改，不派修復單。阻擋級一律走工人（第七節；收尾模式例外，見本節末）。
-
-- 審查員已指定 `file:line` 與修法，經理只是照抄，不做設計；
-- 每條不超過約 10 行，只動本單已改過的檔，不新增檔；
-- 不改行為，驗收命令不變；不碰斷言、guard、skip、驗收命令；
-- 不在排除域：錢、權限、庫存、對帳、migration、對外契約、憑證設定——這些再小也走工人。
-
-記帳：本單先照第七節提交，直修在派下一張單前完成，改完重跑本單驗收命令，另做一個 commit，body 寫「經理直修：T<N> 第 k 條」，工單的「經理直修」段列出改了哪些檔與行。歸屬交給 `git blame`，總量用 `git log --grep 經理直修` 盤點。
-退場：直修後任一驗收命令失敗 → 撤回直修，本單剩下的成立項全走工人修復單，並在工單記一筆。
-
-**經理直修（文案）**：repo 裡純措辭、只複述程式與既有契約已有行為的描述性文字——README、驗證報告、說明註解——經理可以直接改，單次合計約 20 行內，不新增檔，不必派單。回執、spec／契約、測試、斷言與驗收命令不在內：回執是工人的說法，經理改了就變成證據；spec 改了就是改預期，回第一節。超過 20 行或拿不準的，累積到第八節前合成一張低階單派工人。記帳：不掛在任何工單上、不必重跑工單驗收；另做一個 commit，body 寫「經理直修：文案」，落在第八節整批 `code-review` 範圍內。
-
-**收尾模式（經理自己做）**：Claude、Codex 經理都適用。剩下不超過 3 張小單，或已上線、使用者在旁實測、需要快速回饋的調整期，經理可以把剩下的單拿回來自己改；上方 minor 收斂與 P1 三輪未收斂也可啟動收尾，不受小單數限制。一句話告訴使用者「剩 N 項，改我自己做」、「第 2 輪只剩 minor，改我收尾」或「P1 已修 3 輪未收斂，改我收尾」就開始，使用者喊停就回到派工。收尾期間，第四節第 5 點的跟進單與本節的修復單（含阻擋級）也由經理自己改；阻擋級修完照第七節與母單同一個 commit。一般收尾：碰到秘密、權限、錢、庫存、對帳、migration、對外契約或憑證設定的單不在內；上述兩種收斂收尾依明確例外處理。中途發現要做設計決定或超出原工單，也回到派工或第一節。
-
-閘門不因自己做而省：會改變行為的單照第二節「起點要失敗」，先寫測試、在修前跑紅再改；第四節的驗收命令自己重跑；審查照第五節分級與順位（審查員和經理同一家時註明同系審查）；照第七節逐張提交，body 寫「經理收尾：T<N>」，工單的「經理收尾」段列出改了哪些檔。走 Relay 時：還在 `awaiting_acceptance` 的任務（例如審查後要修）直接改，再用新 key 重跑該 task 驗過的每條 verify 與 review，然後 accept、finalize；還沒派的新小單不建 Relay 任務，驗收用 `scripts/evidence-run.sh`，審查用第五節的 helper。
+- **第 2 輪起只剩 minor，經理直接修**：同一張母單從第 2 輪起只剩已成立、非阻擋的 minor／nit，經理直接修，不再派 Flash；不能把阻擋項降級成 minor。改完重跑本單驗收並做最終 `code-review`，Relay 照目前指紋重驗重審，不沿用修改前的證據。
+- **同一張單的 P1 修了 3 輪仍未收斂，必須升級**：以母單累計，換票、換 session 不歸零；第 4 輪不得再派 DeepSeek Flash 或 GLM Flash，改派已授權的更強施工者，或由經理收尾。
+- **經理直修（審查 nit）**：其他非阻擋 nit 只在條件全符合時經理自己改：照抄審查員指定的修法、每條約 10 行內、只動本單已改過的檔、不改行為、不碰斷言或驗收命令、不在錢／權限／庫存／對帳／migration／對外契約／憑證設定。阻擋級一律走工人（第七節；收尾模式例外）。
+- **經理直修（文案）**：README、說明註解這類只複述既有行為的措辭，單次約 20 行內、不新增檔，不必派單；回執、spec／契約、測試、斷言與驗收命令不在內。
+- **收尾模式（經理自己做）**：Claude、Codex 經理都適用。剩下不超過 3 張小單、已上線且使用者在旁實測的調整期，或上面兩種收斂情況，經理一句話告訴使用者（例如「剩 N 項，改我自己做」）就自己改，使用者喊停就回到派工；收尾期間跟進單與修復單（含阻擋級）也由經理改。一般收尾碰到秘密、權限、錢、庫存、對帳、migration、對外契約或憑證設定的單不在內。閘門不省：起點要失敗、第四節驗收自己重跑、第五節審查、第七節逐張提交（body 寫「經理收尾：T<N>」）。
 
 ## 七、逐張本機提交（不 push）
 
-一張單要同時滿足下面幾項，經理才為它做一個本機 commit：第四節驗收通過、`verify-change` 跑過、高階單的外部審查各條已核實處置、`code-review` 通過。
+第四節驗收通過、`verify-change` 跑過、高階單的外部審查已逐條處置、`code-review` 通過，經理才為這張單做一個本機 commit。
 
-- **阻擋級成立項不得拆單繞過**：成立且會造成錯誤行為、違反契約或讓驗證不成立的，修復單驗收通過前本單不提交，修好後和本單同一個 commit（body 列兩個工單號）。只有非阻擋的成立項可拆成跟進單，記在工單裡，各自一個 commit。
-- `git add` 只加本單的檔，不用 `-A` 或 `.`；工人還在改的檔不要提交。
-- 標題照 repo 的 commit 規範（很多 repo 禁裸 `WIP` 標題、禁日期）；body 寫工單號與驗證摘要。
-- 提交後下一張單以新的 HEAD 為 base，審查與驗收都以 `git diff HEAD` 為範圍，不和前一張混在一起。
-- 已 push 的提交不改寫；是否在 PR 前整理（squash）照 repo 規則。
+- **阻擋級成立項不得拆單繞過**：修復單驗收通過前本單不提交，修好後和本單同一個 commit（body 列兩個工單號）；只有非阻擋的成立項可拆成跟進單。
+- `git add` 只加本單的檔，不用 `-A` 或 `.`；標題照 repo 的 commit 規範，body 寫工單號與驗證摘要。
+- 下一張以新的 HEAD 為 base，審查與驗收都以 `git diff HEAD` 為範圍；已 push 的提交不改寫。
 
 ## 八、收尾
 
-push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，看各張單之間的互相影響（例如後一張改了前一張依賴的東西）；token 不是問題時再加一輪外部審查（照第五節順位），審查包換成整批 diff 與各單驗證證據。發現問題照第六、七節開修復單處理。
-
-閘門都過、repo 規則允許時才 push 分支並開 PR，PR 說明帶工單號；merge 與部署照 repo 流程並經人同意。清暫存前，把審查結論、各條處置、驗證命令與結果、剩餘限制保存在工單或 PR；秘密要遮，大型原始 log 留 Git 外（`~/.local/state/osslab-manager/`），唯一驗收證據不留在 `/tmp`。盤點建的臨時環境此時清掉；`pi-sessions/` 裡用不到的 session 目錄一併刪：`base-head` 與該 worktree 目前 HEAD 不同的全刪（helper 只接續 HEAD 未變的 session）；同一 worktree 只留仍可能被接續的那個（手動派工是原單號，Relay 是該 task 最新成功 pi 工人的 attempt id）。
-
-工單挪到 `_tickets/done/`。用白話告訴使用者：什麼能用了、會注意到什麼變化、還有哪些沒驗；分清「已 merge」與「已實際套用到 runtime」。
+push 前對整批（本輪起點 `..HEAD`）跑一次 `code-review`，token 不是問題時再加一輪外部審查；閘門都過、repo 規則允許時才 push 開 PR，merge 與部署照 repo 流程並經人同意。審查結論、處置、驗證結果與剩餘限制存在工單或 PR，大型 log 留 Git 外；清掉盤點建的臨時環境與用不到的 `pi-sessions/`（細則見 `docs/closeout.md`）。工單挪到 `_tickets/done/`，用白話告訴使用者什麼能用了、會注意到什麼變化、還有哪些沒驗，分清「已 merge」與「已實際套用到 runtime」。
 
 ## 九、按職責分段換 session
 
-一則 session 同時扛對齊、派工、驗收、提交，context 越滾越大，後段判斷會變差。工作分三段，有自動接力能力與授權才在段界換 session；新段只讀交接檔（與 Relay 帳本）開工，不背前段對話。
+工作分三段：規格段（第〇～二節：對齊、盤點、拆單、確認清單）、施工段（第三節：派單、等待、收回執）、驗收段（第四～八節：重跑驗收、審查、核實、修復、提交、收尾）。新段只讀交接檔（與 Relay 帳本）開工，不背前段對話。
 
-| 段 | 職責（對應節） | 結束時已在檔案裡的產出 |
-|---|---|---|
-| 規格段 | 對齊、盤點、拆單、貼確認清單（第〇～二節） | 確認清單、工單檔、缺口表 |
-| 施工段 | 派單、等待、收回執（第三節） | 回執、工作樹 diff |
-| 驗收段 | 重跑驗收、審查、核實、派修復／跟進單、提交、收尾（第四～八節） | commit、驗證與審查證據 |
+- 規格段 → 施工段：有自動接力能力與持續授權就換，否則在本 session 續辦；不能自動接力不等於停工。施工段 → 驗收段：高階單有自動接力能力就換，低階單可在同一 session 接著驗收。
+- 修復迴圈留在驗收段：跟進單、修復單在驗收段就地派出、等回執、接著驗收；它們的 `blocked-by` 寫母單號，母單回執已讀、驗收結論已定就算解除（不必等母單提交）。阻擋級修復單與母單同一個 commit。同鏈的下一張新單回施工段。
+- 接手只讀必要的：確認時只讀交接檔；正式接任讀 SKILL 本文、下一張工單與該段要用的 docs；長 notes 只查需要的段落，同一份文件不重讀。細則見 `docs/handoff.md`「接手讀什麼」。
+- 段內安全閥：已跑約 3 小時，或 context 到約 50% 就先寫好交接，到約 60% 不再開新一輪施工、驗證或審查，在最近的安全停點換段（沒有進行中的寫入、驗證或審查，結果已存檔），不必等整張單提交。新 session 開工就超過約 40% 時先縮小必讀範圍，不接連換空白 session。細則見 `docs/handoff.md`「context 安全閥」。
+- 換段前提：工人結束、回執讀完、目前的結果、未決事項與 task 狀態已存檔（安全閥換段不必等整段產出或提交）；等人決定或使用者叫停也停在段界。後繼確認接任後，舊段停止施工，不兩邊同時派工；修復輪次照母單累計，不因換 session 歸零。走 Relay 時可把段當 owner，段界用 `osrelay handoff`，後繼要重新 verify／review。
 
-- 規格段 → 施工段：有自動接力能力與持續授權就換，否則在本 session 續辦；不能自動接力不等於停工。
-- 施工段一段可跑多張：不同 worktree 的獨立工單鏈可平行派；同一 worktree 仍一次一張、下一張以新 HEAD 為 base，所以同鏈是「施工 → 驗收 → 施工…」交替。
-- 施工段 → 驗收段：高階單有自動接力能力就換，否則本 session 繼續；低階單可在同一 session 接著驗收。職責與驗收閘門仍分段，不要求每段都由人手動重開。
-- 修復迴圈留在驗收段：第四節第 5 點的跟進單、第六節的修復單由驗收段寫好就地派出、等回執、接著驗收，不回施工段——修復需要的正是這張單的驗收結論；阻擋級修復單照第七節與母單同一個 commit。Relay 的阻擋修復映射母 task 的新 attempt，見 `docs/relay.md`「阻擋修復票如何映射」。修復／跟進單的 `blocked-by` 寫母單號，母單回執已讀、驗收結論已定就算解除，不套第二節「前置單已提交」的規則。
-- 驗收段提交後，同鏈的下一張**新單**回施工段，由施工段依交接檔指向的回執存疑項把它寫細再派。
-- 段內安全閥：同一段還沒結束，但已跑約 3 小時，或 runtime 回報 context 超過約 60%（沒有回報就不估），也在工單邊界換。
-- 換段前提：工人結束、回執讀完、產出已在上表的檔案裡。卡在等人決定（第二節那三種）或使用者叫停，也停在段界寫交接。
-- 走 Relay 時可把段當 owner（`<專案>-spec`／`-build`／`-accept`），段界用 `osrelay handoff`；後繼要重新 verify／review，本來就是驗收段的工作。
-
-換段的交接檔內容（約 2KB 上限）、Paseo 自開下一則、接手 session 的信任規則：動作前先讀 `docs/handoff.md`。交接檔放 `~/.local/state/osslab-manager/handoffs/<短名>.md`，不進 git。第五節的唯讀審查照舊；換 session、對齊公開 repo，都不改審查員。
+交接檔（約 2KB，放 `~/.local/state/osslab-manager/handoffs/<短名>.md`，不進 git）、Paseo 自開下一則與接手信任規則：動作前先讀 `docs/handoff.md`。換 session 不改審查員。
 
 ## 規矩
 

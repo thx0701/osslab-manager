@@ -47,3 +47,17 @@ printf '\nhelper exit=%s\n' "$rc" >> "$L"; exit "$rc"
 - helper 非零退出＝失敗：照 SKILL.md 第三節第 5 點查明原因後可重派。
 - `worker.log` 的 pid 已不在、也沒有回執＝工人死在半路。先確認真的死了：`ps -o etime=,args= -p <pid>` 要看 args 還是不是那支 helper／工人（PID 會被系統重用）。pi 工人的 pid 是 RPC 驅動程式（args 是 `python3 -I …/pi-worker-driver.py …`），pi 是它的子程序；驅動程式一死 pi 會收到 SIGTERM 自行收尾，收屍前再用 `pgrep -af -- '<工單檔名>'` 確認沒有殘留的 pi（pi 的 prompt 參數含工單路徑）。確認後收屍：停掉它留下的子程序（測試 server、shell）；先依 [收屍備份與還原](recovery.md) 保存 binary patch、未追蹤檔與 HEAD，備份成功並核對範圍後才可依既有授權清理，或在工單寫明繼承哪些；然後挪回 `_tickets/open/`。備份失敗不得清理或重派。
 - 重派次數與原因記在**同一張工單**的 `重派` 欄，不開新檔。同一張單死兩次就改派備援或拆單。
+
+## 派單規則原文（SKILL 第三節第 1～3、5～7 點）
+
+派第一張前，第二節的確認清單必須已經貼在對話裡；沒貼不派。
+
+1. `mv` 到 `_tickets/doing/`（挪成功＝上鎖），派出後由經理照 `worker.log` 起跑行的 `engine=` 與 `at=` 填 `claimed-by`（`引擎 @ 時間`），不自己抄模型名；helper 的 `at=` 已是台灣時間，主機時鐘是 UTC，別用裸 `date`。
+2. 背景執行 helper（一張單常跑一分鐘到數十分鐘）。派工指令、attempt 目錄、`helper exit=<n>` 收尾行、`--resume <接續鍵>` 何時可帶、凍結 skill 副本的做法：照 [docs/manual-dispatch.md](manual-dispatch.md) 第 1 節，不自己改寫指令。
+3. 同一個 worktree 一次只派一張；不同 worktree 可以平行跑不同工單鏈。只派 `blocked-by` 已解除的單。一條鏈的 review 要等該 worktree 沒有進行中的工人或 verify；這時另一條鏈可以在自己的 worktree 上施工。
+
+（第 4 點等法見 `waiting.md`。）
+
+5. 等到第 4 點的完成信號再讀回執；讀到回執前不轉述、不猜結果。helper 非零退出時，即使有回執也要先查再收。
+6. 改派單指示時，連 helper 實際送出的 prompt 一起看。擷取到的呼叫只證明送了什麼，不證明模型照做。
+7. **卡在 `doing` 的單怎麼收**（helper 非零退出、工人死在半路、重派次數與收屍順序）：照 [docs/manual-dispatch.md](manual-dispatch.md) 第 2 節。收屍完成前，不在這個 worktree 疊任何 `T<編號>b` 或下一張單。

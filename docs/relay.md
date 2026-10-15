@@ -1,5 +1,7 @@
 # Relay：經理的持久執行底座
 
+> 依操作讀對應章節，不必整份讀：接手查狀態→下一段「先 `osrelay doctor`」；派工→「工單到驗收」第 1～3 點；等待、叫醒與工人發問→第 4 點；verify／review／accept／finalize→第 5～8 點；修復→「阻擋修復票如何映射」；阻塞、恢復與換 session→最後一節。
+
 適用已安裝 `osrelay` 的主機上當經理的 Codex／Claude Code（Paseo 或一般終端機皆可；本 skill 只支援這兩種經理）。經理照 SKILL.md 做盤點、拆單、判斷與逐張本機提交；
 Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿用 session 設定。
 施工預設 pi，備援明確 `--engine glm`，review 依序 Codex（預設，GPT-6 Astra medium）→ `--engine glm`（完整 GLM-5.3 max）→ `--engine grok`（已停訂，到期前可用），三者都可指定（見 SKILL 第五節；`--engine codex` 是審查員，跟任務的 `--runtime codex` 無關）。Claude Haiku 不在 `osrelay` 的引擎表裡，不要用手動 helper 繞過進行中的 Relay 任務。模型正本是本 skill helper
@@ -10,6 +12,12 @@ Relay 只代管程序與證據。Codex 維持 Full Access、medium；Claude 沿�
 `context <goal id>`，讀每節狀態與證據指紋。`runner.alive=false`
 表示先處理 runner；不要繞過 Relay 手動派同一 worktree。程式在公開 repo 的 [`relay/`](https://github.com/thx0701/osslab-manager/tree/main/relay)，
 部署與 Paseo 操作見其中的 `docs/paseo.md`。
+
+## SKILL 的 Relay 段原文
+
+已安裝 `osrelay` 的主機（Paseo 上或一般終端機皆可），Codex 或 Claude Code 當經理時，托管時依要做的操作讀本檔對應章節，由 Relay 保管派工、等待、恢復與交接；本 skill 仍負責決策、驗收與提交。Relay 的施工 helper 是 pi、glm，審查 helper 依序是 codex、glm、grok。Claude Haiku 不在這張引擎表裡。Relay 不開經理 session；attempt 結束或工人發問時，會經 Paseo 叫醒該 owner 最近一次 `bind` 的 session（Codex 預設開、Claude 預設關，見 `docs/relay.md`）。自動開下一段只有 Paseo 的 `create_agent`（第九節、`docs/handoff.md`）。
+
+Relay 路徑的 SQLite 是執行狀態正本；下文目錄搬移、手動 PID 等待、收屍與換段程序改用該文件的 CLI 操作，不混用兩套派工。其餘工單品質、依賴、核實與權限規則照舊。未安裝 Relay 的 host 仍用下文原流程；已存在 Relay 任務而 runner 不可用時先恢復 runner，不另走 helper 重派。
 
 ## 工單到驗收
 
